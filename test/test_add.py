@@ -3,7 +3,8 @@ import torch
 from test_framework import TestAbc
 
 def add(*tensors: torch.Tensor, **attrs) -> None:
-    assert len(tensors) == 3
+    if len(tensors) != 3:
+        raise ValueError(f"Expect 3 tensors (a, b, c) for torch.add operation, but got {tensors}.")
     a, b, c = tensors
     # torch.add: out_of_place
     c.copy_(a + b)
