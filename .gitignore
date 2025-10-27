@@ -9,4 +9,7 @@ wheels/
 # Virtual environments
 .venv
 
+#log
+*.log
+
 .vscode

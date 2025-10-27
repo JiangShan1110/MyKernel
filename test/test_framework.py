@@ -1,23 +1,16 @@
-
-from pathlib import Path
+import os
 from typing import Optional, Tuple
-from tabulate import tabulate
-import torch
-from torch.utils.cpp_extension import load
 
-from utils import LOG, Col
+import torch
+from tabulate import tabulate
+from utils import LOG
+
 
 class TestAbc:
-    _golden_func = None
-    _cuda_name = ""
-    _cuda_sources = []
-    _cuda_extra_cuda_cflags = []
-    _cuda_extra_cflags = []
-
     @staticmethod
     def get_tensor(
         shape: Tuple[int, ...],
-        dtype: torch.dtype = torch.float32,
+        dtype: torch.dtype,
         device: Optional[torch.device] = None,
         scale: float = 8.0,
         bias: float = -8.0,
@@ -25,67 +18,93 @@ class TestAbc:
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         return scale * torch.rand(size=shape, dtype=dtype, device=device) + bias
-    
-    def _compare_tensors(self, a: torch.Tensor, b: torch.Tensor, rtol: float = 1e-5, atol: float = 1e-8) -> bool:
-        LOG.debug(f"Comparing {Col.M} <{a.shape}, {a.dtype}> {Col.RESET} v.s. {Col.M} <{b.shape}, {b.dtype}> {Col.RESET} with rtol={rtol}, atol={atol}")
 
-        if a.shape != b.shape:
-            raise ValueError(f"shape mismatch: {a.shape} vs {b.shape}")
+    def _compare_tensors(
+        self,
+        model_res: torch.Tensor,
+        golden_res: torch.Tensor,
+        rtol: float = 1e-5,
+        atol: float = 1e-8,
+    ) -> bool:
+        LOG.info(
+            f"Comparing Model ({model_res.shape}, {model_res.dtype}) v.s. Golden ({golden_res.shape}, {golden_res.dtype})"
+        )
 
-        if a.is_floating_point() or b.is_floating_point():
-            mask = ~torch.isclose(a, b, rtol=rtol, atol=atol)
+        if model_res.shape != golden_res.shape:
+            raise ValueError(f"shape mismatch: {model_res.shape} vs {golden_res.shape}")
+
+        if model_res.is_floating_point() or golden_res.is_floating_point():
+            mask = ~torch.isclose(model_res, golden_res, rtol=rtol, atol=atol)
         else:
-            mask = a != b
+            mask = model_res != golden_res
+
+        idx = torch.nonzero(mask, as_tuple=False)  # [N, ndim]
+        ratio = mask.sum().item() / idx.size(0) * 100 if idx.size(0) > 0 else 0.0
+        LOG.debug(f"Get error ratio: {ratio:.2f}% with rtol: {rtol}, atol: {atol}.")
 
         if not mask.any():
-            LOG.debug(f"{Col.G} Tensor comparison succeeded. {Col.RESET}")
-            return 
-        
-        idx = torch.nonzero(mask, as_tuple=False)   # [N, ndim]
+            LOG.debug(f"Tensor comparison succeeded.")
+            return
 
-        vals_a = a[mask].flatten()
-        vals_b = b[mask].flatten()
+        vals_a = model_res[mask].flatten()
+        vals_b = golden_res[mask].flatten()
 
         table = []
         for i in range(idx.size(0)):
-            coord = tuple(idx[i].tolist())
+            coord = idx[i].tolist()
             a_val = vals_a[i].item()
             b_val = vals_b[i].item()
             cur_atol = abs(a_val - b_val)
             cur_rtol = cur_atol / (abs(b_val) + 1e-12)
             table.append([coord, a_val, b_val, cur_atol, cur_rtol])
 
-        LOG.debug(
-            f"Get {idx.size(0)} different elements:\n{tabulate(table, headers=['index', 'model', 'golden', 'atol', 'rtol'], tablefmt='simple')}",
+        table_sorted = sorted(table, key=lambda r: r[3], reverse=True)[:50]
+        print_table = tabulate(
+            table_sorted,
+            headers=["index", "model", "golden", "atol", "rtol"],
+            tablefmt="grid",
+            colalign=("left",) * 5,
+        )
+        LOG.error(f"Tensor comparison failed!")
+        LOG.error(
+            f"Top-50 error elements:\n{print_table}",
         )
 
-        raise AssertionError(f"{Col.R}Tensor comparison failed.{Col.RESET}")
+        raise AssertionError(f"Tensor comparison failed.")
 
-    def _kernel_func(self, *tensor: torch.Tensor, **kwargs) -> None:
-        func_name = self._cuda_name
-        func_file = [Path("./src/kernel") / path for path in self._cuda_sources]
-        lib = load(
-            name=func_name,
-            sources=func_file,
-            extra_cuda_cflags=self._cuda_extra_cuda_cflags,
-            extra_cflags=self._cuda_extra_cflags,
-        )
-        func = getattr(lib, func_name)
-        func(*tensor, **kwargs)
+    def kernel_func(self, *tensors: torch.Tensor, **attrs) -> None:
+        raise RuntimeError("Not implemented.")
+
+    def golden_func(self, *tensors: torch.Tensor, **attrs) -> None:
+        raise RuntimeError("Not implemented.")
 
     def invoke(
         self,
         inputs: Tuple[torch.Tensor, ...],
-        output: torch.Tensor,
+        outputs: Tuple[torch.Tensor, ...],
         attrs: dict,
         **kwargs,
-    ):  
-        golden_output = torch.empty_like(output)
-        self._kernel_func(*inputs, output, **attrs)
-        self._golden_func(*inputs, golden_output, **attrs)
-        self._compare_tensors(output, golden_output, rtol=kwargs.get("rtol", 1e-5), atol=kwargs.get("atol", 1e-8))
+    ):
+        LOG.info(f"Current PID: {os.getpid()}")
+        LOG.info(f"Get inputs {[ (t.shape, t.dtype) for t in inputs ]}")
+        LOG.info(f"Get output: {[ (t.shape, t.dtype) for t in outputs ]}")
+        LOG.info(f"Get attrs: {attrs}")
+
+        golden_outputs = [torch.empty_like(out) for out in outputs]
+
+        LOG.info("Running golden function...")
+        self.golden_func(*inputs, *golden_outputs, **attrs)
+
+        LOG.info("Running kernel function...")
+        self.kernel_func(*inputs, *outputs, **attrs)
+
+        LOG.info("Comparing outputs...")
+        for output, golden_output in zip(outputs, golden_outputs):
+            self._compare_tensors(
+                output.detach().cpu(),
+                golden_output.detach().cpu(),
+                rtol=kwargs.get("rtol", 1e-5),
+                atol=kwargs.get("atol", 1e-8),
+            )
 
         return output, golden_output
-
-    
-
