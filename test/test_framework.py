@@ -14,10 +14,19 @@ class TestAbc:
         device: Optional[torch.device] = None,
         scale: float = 8.0,
         bias: float = -8.0,
+        is_random: bool = True,
+        data: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        return scale * torch.rand(size=shape, dtype=dtype, device=device) + bias
+        
+        if data is not None:
+            return data.to(device=device, dtype=dtype).reshape(shape)
+        
+        if not is_random:
+            return torch.arange(0, torch.prod(torch.tensor(shape)), dtype=dtype, device=device).reshape(shape)
+        else:
+            return scale * torch.rand(size=shape, dtype=dtype, device=device) + bias
 
     def _compare_tensors(
         self,
@@ -72,17 +81,13 @@ class TestAbc:
 
         raise AssertionError(f"Tensor comparison failed.")
 
-    def kernel_func(self, *tensors: torch.Tensor, **attrs) -> None:
-        raise RuntimeError("Not implemented.")
-
-    def golden_func(self, *tensors: torch.Tensor, **attrs) -> None:
-        raise RuntimeError("Not implemented.")
-
     def invoke(
         self,
         inputs: Tuple[torch.Tensor, ...],
         outputs: Tuple[torch.Tensor, ...],
         attrs: dict,
+        kernel_func: callable = None,
+        golden_func: callable = None,
         **kwargs,
     ):
         LOG.info(f"Current PID: {os.getpid()}")
@@ -93,10 +98,10 @@ class TestAbc:
         golden_outputs = [torch.empty_like(out) for out in outputs]
 
         LOG.info("Running golden function...")
-        self.golden_func(*inputs, *golden_outputs, **attrs)
+        golden_func(*inputs, *golden_outputs, **attrs)
 
         LOG.info("Running kernel function...")
-        self.kernel_func(*inputs, *outputs, **attrs)
+        kernel_func(*inputs, *outputs, **attrs)
 
         LOG.info("Comparing outputs...")
         for output, golden_output in zip(outputs, golden_outputs):
@@ -108,3 +113,31 @@ class TestAbc:
             )
 
         return output, golden_output
+
+    def perf(
+        self,
+        inputs: Tuple[torch.Tensor, ...],
+        outputs: Tuple[torch.Tensor, ...],
+        attrs: dict,
+        kernel_func: callable = None,
+        golden_func: callable = None,
+        repeat: int = 100,
+    ) -> float:
+        LOG.info(f"Current PID: {os.getpid()}")
+        LOG.info(f"Get inputs {[ (t.shape, t.dtype) for t in inputs ]}")
+        LOG.info(f"Get output: {[ (t.shape, t.dtype) for t in outputs ]}")
+        LOG.info(f"Get attrs: {attrs}")
+
+        # Warm up
+        self.kernel_func(*inputs, *outputs, **attrs)
+        
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for _ in range(repeat):
+            self.kernel_func(*inputs, *outputs, **attrs)
+        end.record()
+        torch.cuda.synchronize()
+        elapsed_time_ms = start.elapsed_time(end) / repeat
+        LOG.info(f"Average execution time: {elapsed_time_ms:.6f} ms")
+        return elapsed_time_ms

@@ -28,3 +28,7 @@ addopts = [
     "--tb=short",
     "-n 8"
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
