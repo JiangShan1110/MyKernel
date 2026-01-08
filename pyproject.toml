@@ -31,4 +31,4 @@ addopts = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["src*", "test_framework"]

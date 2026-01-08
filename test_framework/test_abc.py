@@ -1,10 +1,9 @@
 import os
-from typing import Optional, Tuple
-
 import torch
+from typing import Optional, Tuple
 from tabulate import tabulate
-from utils import LOG
 
+from .utils import LOG
 
 class TestAbc:
     @staticmethod

@@ -1,6 +1,6 @@
 import pytest
 import torch
-from test_framework import TestAbc
+from test_framework.test_abc import TestAbc
 
 def add(*tensors: torch.Tensor, **attrs) -> None:
     if len(tensors) != 3:
@@ -25,7 +25,7 @@ class TestAdd(TestAbc):
 
         from torch.utils.cpp_extension import load
         func_name = "elementwise_add_f32"
-        func_file = ["src/kernel/elementwise/elementwise.cu"]
+        func_file = ["src/elementwise/elementwise.cu"]
         lib = load(
             name=func_name,
             sources=func_file,
@@ -49,7 +49,7 @@ class TestAdd(TestAbc):
         shape,
         dtype,
     ):
-        from src.kernel.elementwise.elementwise import elementwise_add
+        from src.elementwise.elementwise import elementwise_add
         a = self.get_tensor(shape, dtype)
         b = self.get_tensor(shape, dtype)
         output = torch.empty_like(a)
