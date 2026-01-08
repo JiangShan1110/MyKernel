@@ -11,7 +11,6 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.markup import escape
 from rich.table import Table
-from rich.text import Text
 
 from test_framework.utils import make_json_friendly
 
@@ -99,23 +98,17 @@ def _print_rich_table() -> None:
         return
 
     passed = sum(1 for c in CASES if c["status"] == "PASS")
-    failed = len(CASES) - passed
+    len(CASES) - passed
 
-    width = console.size.width
-    summary = Text(
-        f" Total={len(CASES)}  Pass={passed}  Fail={failed} ".center(width, "="),
-        style="italic bold",
-    )
-
+    console.size.width
     table = Table(
-        title=summary,
         header_style="italic cyan",
         expand=True,
         box=box.ASCII,
     )
-    table.add_column("Name")
-    table.add_column("Status")
-    table.add_column("Parameters")
+    table.add_column("Name", overflow="fold")
+    table.add_column("Status", overflow="fold")
+    table.add_column("Parameters", overflow="fold")
 
     for c in CASES:
         if c["status"] == "PASS":

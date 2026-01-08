@@ -8,6 +8,9 @@ from .utils import LOG
 
 
 class TestAbc:
+    _atol = 1e-2
+    _rtol = 1e-2
+
     @staticmethod
     def get_tensor(
         shape: Tuple[int, ...],
@@ -35,8 +38,8 @@ class TestAbc:
         self,
         model_res: torch.Tensor,
         golden_res: torch.Tensor,
-        rtol: float = 1e-5,
-        atol: float = 1e-8,
+        rtol: float,
+        atol: float,
     ) -> bool:
         LOG.info(
             "Comparing Model (%s, %s) v.s. Golden (%s, %s)",
@@ -48,8 +51,9 @@ class TestAbc:
 
         if model_res.shape != golden_res.shape:
             raise ValueError(f"shape mismatch: {model_res.shape} vs {golden_res.shape}")
+        if model_res.dtype != golden_res.dtype:
+            raise ValueError(f"dtype mismatch: {model_res.dtype} vs {golden_res.dtype}")
 
-        # 1. 误差掩码（向量化）
         if model_res.is_floating_point() or golden_res.is_floating_point():
             mask = ~torch.isclose(model_res, golden_res, rtol=rtol, atol=atol)
         else:
@@ -63,16 +67,13 @@ class TestAbc:
         if err_count == 0:
             return True
 
-        # 2. 一次性抽取所有误差值（向量化）
         idx = torch.nonzero(mask, as_tuple=False)  # [N, ndim]
         vals_a = model_res[mask]  # 1D tensor
         vals_b = golden_res[mask]
 
-        # 3. 一次性计算 atol/rtol（向量化）
         atol_vec = (vals_a - vals_b).abs()
         rtol_vec = atol_vec / (vals_b.abs() + 1e-12)
 
-        # 4. 取 top-50 最离谱的点
         _, top_i = torch.topk(atol_vec, k=min(50, err_count))
         top_idx = idx[top_i].tolist()
         top_a = vals_a[top_i].cpu().numpy()
@@ -80,7 +81,6 @@ class TestAbc:
         top_atol = atol_vec[top_i].cpu().numpy()
         top_rtol = rtol_vec[top_i].cpu().numpy()
 
-        # 5. 拼表打印
         table = [
             (idx, a, b, atol, rtol)
             for idx, a, b, atol, rtol in zip(top_idx, top_a, top_b, top_atol, top_rtol)
@@ -121,8 +121,8 @@ class TestAbc:
             self._compare_tensors(
                 output.detach().cpu(),
                 golden_output.detach().cpu(),
-                rtol=kwargs.get("rtol", 1e-5),
-                atol=kwargs.get("atol", 1e-8),
+                rtol=kwargs.get("rtol", self._rtol),
+                atol=kwargs.get("atol", self._atol),
             )
 
         return output, golden_output

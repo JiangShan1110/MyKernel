@@ -1,7 +1,10 @@
+import pytest
 import torch
 
+from test_framework.test_abc import TestAbc
 
-def strandard_attention(
+
+def standard_attention(
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
@@ -43,19 +46,19 @@ def flash_attention_v1(
     assert query.size(0) == key.size(0) == value.size(0) == output.size(0)
     assert query.size(1) == key.size(1) == value.size(1) == output.size(1)
 
-    query = query.to(torch.float32)
-    key = key.to(torch.float32)
-    value = value.to(torch.float32)
-
     TILE_M = 128
     TILE_N_K = 128
     N = query.size(0)
     D = query.size(1)
 
+    query = query.to(torch.float32)
+    key = key.to(torch.float32)
+    value = value.to(torch.float32)
+
     output.fill_(0)
-    tmp_max = torch.zeros((N, 1), dtype=torch.float32)
+    tmp_max = torch.zeros((N, 1), dtype=torch.float32).to(query.device)
     tmp_max.fill_(-torch.inf)
-    tmp_sum = torch.zeros_like(tmp_max)
+    tmp_sum = torch.zeros_like(tmp_max).to(query.device)
 
     for start_n_k in range(0, N, TILE_N_K):
         tile_k = key[start_n_k : start_n_k + TILE_N_K, :]
@@ -85,19 +88,26 @@ def flash_attention_v1(
 
             tmp_max[start_m : start_m + TILE_M, :] = cur_max
             tmp_sum[start_m : start_m + TILE_M, :] = cur_sum
-            output[start_m : start_m + TILE_M, :] = cur_output
+            output[start_m : start_m + TILE_M, :] = cur_output.to(output.dtype)
 
 
-q = torch.rand((1024, 1024), dtype=torch.float32)
-k = torch.rand((1024, 1024), dtype=torch.float32)
-v = torch.rand((1024, 1024), dtype=torch.float32)
+class TestFlashAttention(TestAbc):
+    @pytest.mark.parametrize("shape", [(512, 512), (1024, 1024), (2048, 2048)])
+    @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+    def test_flash_attention_v1_golden(
+        self,
+        shape,
+        dtype,
+    ):
+        q = self.get_tensor(shape, dtype)
+        k = self.get_tensor(shape, dtype)
+        v = self.get_tensor(shape, dtype)
+        out_flash = torch.zeros_like(q)
 
-out1 = torch.zeros_like(q)
-out2 = torch.zeros_like(q)
-strandard_attention(q, k, v, out1)
-flash_attention_v1(q, k, v, out2)
-
-if torch.allclose(out1, out2, rtol=1e-5, atol=1e-8):
-    print("Outputs are close!")
-else:
-    print("Outputs differ!")
+        self.invoke(
+            [q, k, v],
+            [out_flash],
+            attrs={},
+            kernel_func=flash_attention_v1,
+            golden_func=standard_attention,
+        )
