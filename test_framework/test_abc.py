@@ -35,50 +35,59 @@ class TestAbc:
         atol: float = 1e-8,
     ) -> bool:
         LOG.info(
-            f"Comparing Model ({model_res.shape}, {model_res.dtype}) v.s. Golden ({golden_res.shape}, {golden_res.dtype})"
+            "Comparing Model (%s, %s) v.s. Golden (%s, %s)",
+            model_res.shape, model_res.dtype, golden_res.shape, golden_res.dtype,
         )
 
         if model_res.shape != golden_res.shape:
             raise ValueError(f"shape mismatch: {model_res.shape} vs {golden_res.shape}")
 
+        # 1. 误差掩码（向量化）
         if model_res.is_floating_point() or golden_res.is_floating_point():
             mask = ~torch.isclose(model_res, golden_res, rtol=rtol, atol=atol)
         else:
             mask = model_res != golden_res
 
-        idx = torch.nonzero(mask, as_tuple=False)  # [N, ndim]
-        ratio = mask.sum().item() / idx.size(0) * 100 if idx.size(0) > 0 else 0.0
-        LOG.debug(f"Get error ratio: {ratio:.2f}% with rtol: {rtol}, atol: {atol}.")
+        err_count = mask.sum().item()
+        total = model_res.numel()
+        ratio = err_count / total * 100 if total else 0.
 
-        if not mask.any():
-            LOG.debug(f"Tensor comparison succeeded.")
-            return
+        LOG.debug("Error ratio: %.4f%% (rtol=%g, atol=%g)", ratio, rtol, atol)
+        if err_count == 0:
+            return True
 
-        vals_a = model_res[mask].flatten()
-        vals_b = golden_res[mask].flatten()
+        # 2. 一次性抽取所有误差值（向量化）
+        idx = torch.nonzero(mask, as_tuple=False)          # [N, ndim]
+        vals_a = model_res[mask]                           # 1D tensor
+        vals_b = golden_res[mask]
 
-        table = []
-        for i in range(idx.size(0)):
-            coord = idx[i].tolist()
-            a_val = vals_a[i].item()
-            b_val = vals_b[i].item()
-            cur_atol = abs(a_val - b_val)
-            cur_rtol = cur_atol / (abs(b_val) + 1e-12)
-            table.append([coord, a_val, b_val, cur_atol, cur_rtol])
+        # 3. 一次性计算 atol/rtol（向量化）
+        atol_vec = (vals_a - vals_b).abs()
+        rtol_vec = atol_vec / (vals_b.abs() + 1e-12)
 
-        table_sorted = sorted(table, key=lambda r: r[3], reverse=True)[:50]
+        # 4. 取 top-50 最离谱的点
+        _, top_i = torch.topk(atol_vec, k=min(50, err_count))
+        top_idx = idx[top_i].tolist()
+        top_a = vals_a[top_i].cpu().numpy()
+        top_b = vals_b[top_i].cpu().numpy()
+        top_atol = atol_vec[top_i].cpu().numpy()
+        top_rtol = rtol_vec[top_i].cpu().numpy()
+
+        # 5. 拼表打印
+        table = [
+            (idx, a, b, atol, rtol)
+            for idx, a, b, atol, rtol in zip(
+                top_idx, top_a, top_b, top_atol, top_rtol
+            )
+        ]
         print_table = tabulate(
-            table_sorted,
+            table,
             headers=["index", "model", "golden", "atol", "rtol"],
-            tablefmt="grid",
             colalign=("left",) * 5,
         )
-        LOG.error(f"Tensor comparison failed!")
-        LOG.error(
-            f"Top-50 error elements:\n{print_table}",
-        )
-
-        raise AssertionError(f"Tensor comparison failed.")
+        LOG.error("Tensor comparison failed!")
+        LOG.debug("Top-50 error elements:\n%s", print_table, extra={'indent': ''})
+        raise AssertionError("Tensor comparison failed.")
 
     def invoke(
         self,
