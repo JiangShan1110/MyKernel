@@ -1,9 +1,11 @@
 import os
-import torch
 from typing import Optional, Tuple
+
+import torch
 from tabulate import tabulate
 
 from .utils import LOG
+
 
 class TestAbc:
     @staticmethod
@@ -18,12 +20,14 @@ class TestAbc:
     ) -> torch.Tensor:
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         if data is not None:
             return data.to(device=device, dtype=dtype).reshape(shape)
-        
+
         if not is_random:
-            return torch.arange(0, torch.prod(torch.tensor(shape)), dtype=dtype, device=device).reshape(shape)
+            return torch.arange(
+                0, torch.prod(torch.tensor(shape)), dtype=dtype, device=device
+            ).reshape(shape)
         else:
             return scale * torch.rand(size=shape, dtype=dtype, device=device) + bias
 
@@ -36,7 +40,10 @@ class TestAbc:
     ) -> bool:
         LOG.info(
             "Comparing Model (%s, %s) v.s. Golden (%s, %s)",
-            model_res.shape, model_res.dtype, golden_res.shape, golden_res.dtype,
+            model_res.shape,
+            model_res.dtype,
+            golden_res.shape,
+            golden_res.dtype,
         )
 
         if model_res.shape != golden_res.shape:
@@ -50,15 +57,15 @@ class TestAbc:
 
         err_count = mask.sum().item()
         total = model_res.numel()
-        ratio = err_count / total * 100 if total else 0.
+        ratio = err_count / total * 100 if total else 0.0
 
         LOG.debug("Error ratio: %.4f%% (rtol=%g, atol=%g)", ratio, rtol, atol)
         if err_count == 0:
             return True
 
         # 2. 一次性抽取所有误差值（向量化）
-        idx = torch.nonzero(mask, as_tuple=False)          # [N, ndim]
-        vals_a = model_res[mask]                           # 1D tensor
+        idx = torch.nonzero(mask, as_tuple=False)  # [N, ndim]
+        vals_a = model_res[mask]  # 1D tensor
         vals_b = golden_res[mask]
 
         # 3. 一次性计算 atol/rtol（向量化）
@@ -76,9 +83,7 @@ class TestAbc:
         # 5. 拼表打印
         table = [
             (idx, a, b, atol, rtol)
-            for idx, a, b, atol, rtol in zip(
-                top_idx, top_a, top_b, top_atol, top_rtol
-            )
+            for idx, a, b, atol, rtol in zip(top_idx, top_a, top_b, top_atol, top_rtol)
         ]
         print_table = tabulate(
             table,
@@ -86,7 +91,7 @@ class TestAbc:
             colalign=("left",) * 5,
         )
         LOG.error("Tensor comparison failed!")
-        LOG.debug("Top-50 error elements:\n%s", print_table, extra={'indent': ''})
+        LOG.debug("Top-50 error elements:\n%s", print_table, extra={"indent": ""})
         raise AssertionError("Tensor comparison failed.")
 
     def invoke(
@@ -138,7 +143,7 @@ class TestAbc:
 
         # Warm up
         self.kernel_func(*inputs, *outputs, **attrs)
-        
+
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()

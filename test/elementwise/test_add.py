@@ -1,9 +1,12 @@
 import pytest
 import torch
+
 from test_framework.test_abc import TestAbc
+
 
 def add(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, **attrs) -> None:
     c[::] = a + b
+
 
 class TestAdd(TestAbc):
     @pytest.mark.parametrize("shape", [(16, 32), (64, 128), (128, 256)])
@@ -18,6 +21,7 @@ class TestAdd(TestAbc):
         output = torch.empty_like(a)
 
         from torch.utils.cpp_extension import load
+
         func_name = "elementwise_add_f32"
         func_file = ["src/elementwise/elementwise.cu"]
         lib = load(
@@ -44,8 +48,11 @@ class TestAdd(TestAbc):
         dtype,
     ):
         from src.elementwise.elementwise import elementwise_add
+
         a = self.get_tensor(shape, dtype)
         b = self.get_tensor(shape, dtype)
         output = torch.empty_like(a)
         attrs = {"BLOCK_SIZE": 1024}
-        self.invoke([a, b], [output], attrs=attrs, kernel_func=elementwise_add, golden_func=add)
+        self.invoke(
+            [a, b], [output], attrs=attrs, kernel_func=elementwise_add, golden_func=add
+        )

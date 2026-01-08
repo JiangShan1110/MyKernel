@@ -12,6 +12,7 @@ from rich.logging import RichHandler
 from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
+
 from test_framework.utils import make_json_friendly
 
 # ---------- global storage ----------
