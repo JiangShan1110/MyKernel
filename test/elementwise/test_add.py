@@ -4,7 +4,7 @@ import torch
 from test_framework.test_abc import TestAbc
 
 
-def add(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, **attrs) -> None:
+def add(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, **kwargs) -> None:
     c[::] = a + b
 
 
@@ -38,7 +38,7 @@ class TestAdd(TestAbc):
         )
         func = getattr(lib, func_name)
 
-        self.invoke([a, b], [output], attrs={}, kernel_func=func, golden_func=add)
+        self.invoke([a, b], [output], kwargs={}, kernel_func=func, golden_func=add)
 
     @pytest.mark.parametrize("shape", [(1024, 2048), (2048, 4096)])
     @pytest.mark.parametrize("dtype", [torch.float32])
@@ -52,7 +52,11 @@ class TestAdd(TestAbc):
         a = self.get_tensor(shape, dtype)
         b = self.get_tensor(shape, dtype)
         output = torch.empty_like(a)
-        attrs = {"BLOCK_SIZE": 1024}
+        kwargs = {"BLOCK_SIZE": 1024}
         self.invoke(
-            [a, b], [output], attrs=attrs, kernel_func=elementwise_add, golden_func=add
+            [a, b],
+            [output],
+            kwargs=kwargs,
+            kernel_func=elementwise_add,
+            golden_func=add,
         )

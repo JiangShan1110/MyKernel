@@ -98,23 +98,23 @@ class TestAbc:
         self,
         inputs: Tuple[torch.Tensor, ...],
         outputs: Tuple[torch.Tensor, ...],
-        attrs: dict,
+        kwargs: dict,
         kernel_func: callable = None,
         golden_func: callable = None,
-        **kwargs,
+        **options,
     ):
         LOG.info(f"Current PID: {os.getpid()}")
         LOG.info(f"Get inputs {[ (t.shape, t.dtype) for t in inputs ]}")
         LOG.info(f"Get output: {[ (t.shape, t.dtype) for t in outputs ]}")
-        LOG.info(f"Get attrs: {attrs}")
+        LOG.info(f"Get kwargs: {kwargs}")
 
         golden_outputs = [torch.empty_like(out) for out in outputs]
 
         LOG.info("Running golden function...")
-        golden_func(*inputs, *golden_outputs, **attrs)
+        golden_func(*inputs, *golden_outputs, **kwargs)
 
         LOG.info("Running kernel function...")
-        kernel_func(*inputs, *outputs, **attrs)
+        kernel_func(*inputs, *outputs, **kwargs)
 
         LOG.info("Comparing outputs...")
         for output, golden_output in zip(outputs, golden_outputs):
@@ -131,7 +131,7 @@ class TestAbc:
         self,
         inputs: Tuple[torch.Tensor, ...],
         outputs: Tuple[torch.Tensor, ...],
-        attrs: dict,
+        kwargs: dict,
         kernel_func: callable = None,
         golden_func: callable = None,
         repeat: int = 100,
@@ -139,16 +139,16 @@ class TestAbc:
         LOG.info(f"Current PID: {os.getpid()}")
         LOG.info(f"Get inputs {[ (t.shape, t.dtype) for t in inputs ]}")
         LOG.info(f"Get output: {[ (t.shape, t.dtype) for t in outputs ]}")
-        LOG.info(f"Get attrs: {attrs}")
+        LOG.info(f"Get kwargs: {kwargs}")
 
         # Warm up
-        self.kernel_func(*inputs, *outputs, **attrs)
+        kernel_func(*inputs, *outputs, **kwargs)
 
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()
         for _ in range(repeat):
-            self.kernel_func(*inputs, *outputs, **attrs)
+            kernel_func(*inputs, *outputs, **kwargs)
         end.record()
         torch.cuda.synchronize()
         elapsed_time_ms = start.elapsed_time(end) / repeat

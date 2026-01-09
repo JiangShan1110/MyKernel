@@ -9,7 +9,8 @@ def standard_attention(
     key: torch.Tensor,
     value: torch.Tensor,
     output: torch.Tensor,
-    **attrs,
+    is_with_causal_mask: bool = False,
+    **kwargs,
 ) -> None:
     """
     A standard implementation of scaled dot-product attention.
@@ -38,7 +39,7 @@ def flash_attention_v1(
     key: torch.Tensor,
     value: torch.Tensor,
     output: torch.Tensor,
-    **attrs,
+    **kwargs,
 ) -> None:
     assert (
         query.dim() == 2 and key.dim() == 2 and value.dim() == 2 and output.dim() == 2
@@ -107,7 +108,7 @@ class TestFlashAttention(TestAbc):
         self.invoke(
             [q, k, v],
             [out_flash],
-            attrs={},
+            kwargs={},
             kernel_func=flash_attention_v1,
             golden_func=standard_attention,
         )
