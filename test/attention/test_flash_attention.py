@@ -1,6 +1,10 @@
 import pytest
 import torch
 
+from src.attention.flash_attention import (
+    flash_attention_v1_triton,
+    flash_attention_v2_triton,
+)
 from test_framework.test_abc import TestAbc
 
 
@@ -225,14 +229,12 @@ class TestFlashAttention(TestAbc):
         v = self.get_tensor(shape, dtype)
         out_flash = torch.zeros_like(q)
 
-        from src.attention.flash_attention import flash_attention_v1_triton
-
         self.invoke(
             [q, k, v],
             [out_flash],
             kwargs={"enable_causal_mask": enable_causal_mask},
             kernel_func=flash_attention_v1_triton,
-            golden_func=flash_attention_v1,
+            golden_func=standard_attention,
         )
 
     @pytest.mark.parametrize("shape", [(128, 128), (2500, 128)])
@@ -249,12 +251,36 @@ class TestFlashAttention(TestAbc):
         v = self.get_tensor(shape, dtype)
         out_flash = torch.zeros_like(q)
 
-        from src.attention.flash_attention import flash_attention_v2_triton
-
         self.invoke(
             [q, k, v],
             [out_flash],
             kwargs={"enable_causal_mask": enable_causal_mask},
             kernel_func=flash_attention_v2_triton,
+            golden_func=standard_attention,
+        )
+
+    @pytest.mark.parametrize("shape", [(4096, 128)])
+    @pytest.mark.parametrize("dtype", [torch.float32])
+    @pytest.mark.parametrize("enable_causal_mask", [False])
+    @pytest.mark.parametrize(
+        "kernel_func", [flash_attention_v1_triton, flash_attention_v2_triton]
+    )
+    def test_flash_attention_perf(
+        self,
+        shape,
+        dtype,
+        enable_causal_mask,
+        kernel_func,
+    ):
+        q = self.get_tensor(shape, dtype)
+        k = self.get_tensor(shape, dtype)
+        v = self.get_tensor(shape, dtype)
+        out_flash = torch.zeros_like(q)
+
+        self.invoke_perf(
+            [q, k, v],
+            [out_flash],
+            kwargs={"enable_causal_mask": enable_causal_mask},
+            kernel_func=kernel_func,
             golden_func=standard_attention,
         )

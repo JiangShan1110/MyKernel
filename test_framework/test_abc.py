@@ -138,7 +138,7 @@ class TestAbc:
 
         return output, golden_output
 
-    def perf(
+    def invoke_perf(
         self,
         inputs: Tuple[torch.Tensor, ...],
         outputs: Tuple[torch.Tensor, ...],

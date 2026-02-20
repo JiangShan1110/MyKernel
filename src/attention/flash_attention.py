@@ -80,6 +80,9 @@ def flash_attention_v1_triton(
     TILE_N_K = 32
     assert N % TILE_M == 0
     assert D % TILE_N_K == 0
+    assert (
+        kwargs.get("enable_causal_mask", False) is False
+    ), "Causal mask is not supported in flash_attention_v1"
 
     grid = ((N + TILE_M - 1) // TILE_M,)
     flash_attention_v1_kenerl[grid](q, k, v, out, N, D, TILE_M, TILE_N_K)
