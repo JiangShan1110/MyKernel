@@ -9,7 +9,7 @@ def standard_attention(
     key: torch.Tensor,
     value: torch.Tensor,
     output: torch.Tensor,
-    is_with_causal_mask: bool = False,
+    enable_causal_mask: bool = False,
     **kwargs,
 ) -> None:
     """
@@ -30,7 +30,7 @@ def standard_attention(
     scores = torch.matmul(query, key.transpose(-2, -1)) / torch.sqrt(
         torch.tensor(d_k, dtype=torch.float32)
     )
-    if is_with_causal_mask:
+    if enable_causal_mask:
         N = scores.size(0)
         causal_mask = torch.triu(
             torch.ones((N, N), device=scores.device), diagonal=1
@@ -46,7 +46,7 @@ def flash_attention_v1(
     key: torch.Tensor,
     value: torch.Tensor,
     output: torch.Tensor,
-    is_with_causal_mask: bool = False,
+    enable_causal_mask: bool = False,
     **kwargs,
 ) -> None:
     assert (
@@ -82,15 +82,19 @@ def flash_attention_v1(
                 tile_q @ tile_k.T / torch.sqrt(torch.tensor(D, dtype=torch.float32))
             )
 
-            if is_with_causal_mask:
+            if enable_causal_mask:
                 m_indices = torch.arange(
                     start=start_m, end=start_m + TILE_M, device=scores.device
                 )[:, None]
                 n_indices = torch.arange(
                     start=start_n_k, end=start_n_k + TILE_N_K, device=scores.device
                 )[None, :]
-                causal_mask = m_indices < n_indices
-                scores.masked_fill_(causal_mask, float("-inf"))
+                causal_mask = m_indices >= n_indices
+                scores = torch.where(
+                    causal_mask,
+                    scores,
+                    torch.tensor(float("-inf"), device=scores.device),
+                )
 
             per_max = tmp_max[start_m : start_m + TILE_M, :]
             cur_max = torch.maximum(per_max, torch.max(scores, dim=-1).values[:, None])
@@ -134,16 +138,18 @@ def flash_attention_v2(
     output.fill_(0)
 
     for start_q in range(0, N, TILE_Q):
+        tile_q_len = min(TILE_Q, N - start_q)
         tile_q = query[start_q : start_q + TILE_Q, :]
 
-        per_sum = torch.zeros((TILE_Q, 1), dtype=DTYPE, device=DEVICE)
-        per_max = torch.zeros((TILE_Q, 1), dtype=DTYPE, device=DEVICE)
+        per_sum = torch.zeros((tile_q_len, 1), dtype=DTYPE, device=DEVICE)
+        per_max = torch.zeros((tile_q_len, 1), dtype=DTYPE, device=DEVICE)
         per_max.fill_(-torch.inf)
-        cur_output = torch.zeros((TILE_Q, d), dtype=DTYPE, device=DEVICE)
+        cur_output = torch.zeros((tile_q_len, d), dtype=DTYPE, device=DEVICE)
 
         for start_kv in range(0, N, TILE_KV):
-            tile_k = key[start_kv : start_kv + TILE_KV, :]
-            tile_v = value[start_kv : start_kv + TILE_KV, :]
+            tile_kv_len = min(TILE_KV, N - start_kv)
+            tile_k = key[start_kv : start_kv + tile_kv_len, :]
+            tile_v = value[start_kv : start_kv + tile_kv_len, :]
 
             scores = (
                 tile_q
@@ -151,15 +157,17 @@ def flash_attention_v2(
                 / torch.sqrt(torch.tensor(d, dtype=DTYPE, device=DEVICE))
             )
 
-            if kwargs.get("is_with_causal_mask", False):
-                q_indices = torch.arange(start_q, start_q + TILE_Q, device=DEVICE)[
+            if kwargs.get("enable_causal_mask", False):
+                q_indices = torch.arange(start_q, start_q + tile_q_len, device=DEVICE)[
                     :, None
                 ]
-                kv_indices = torch.arange(start_kv, start_kv + TILE_KV, device=DEVICE)[
-                    None, :
-                ]
-                causal_mask = q_indices < kv_indices
-                scores.masked_fill_(causal_mask, float("-inf"))
+                kv_indices = torch.arange(
+                    start_kv, start_kv + tile_kv_len, device=DEVICE
+                )[None, :]
+                causal_mask = q_indices >= kv_indices
+                scores = torch.where(
+                    causal_mask, scores, torch.tensor(float("-inf"), device=DEVICE)
+                )
 
             cur_max = torch.maximum(per_max, torch.amax(scores, dim=-1, keepdim=True))
 
@@ -175,19 +183,19 @@ def flash_attention_v2(
             per_max.copy_(cur_max)
             per_sum.copy_(cur_sum)
 
-        output[start_q : start_q + TILE_Q, :] = cur_output.to(output.dtype)
+        output[start_q : start_q + tile_q_len, :] = cur_output.to(output.dtype)
 
 
 class TestFlashAttention(TestAbc):
     @pytest.mark.parametrize("shape", [(512, 512), (1024, 1024), (2048, 2048)])
     @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
-    @pytest.mark.parametrize("is_with_causal_mask", [False, True])
+    @pytest.mark.parametrize("enable_causal_mask", [False, True])
     @pytest.mark.parametrize("kernel_func", [flash_attention_v1, flash_attention_v2])
     def test_flash_attention_golden(
         self,
         shape,
         dtype,
-        is_with_causal_mask,
+        enable_causal_mask,
         kernel_func,
     ):
         q = self.get_tensor(shape, dtype)
@@ -198,19 +206,19 @@ class TestFlashAttention(TestAbc):
         self.invoke(
             [q, k, v],
             [out_flash],
-            kwargs={"is_with_causal_mask": is_with_causal_mask},
+            kwargs={"enable_causal_mask": enable_causal_mask},
             kernel_func=kernel_func,
             golden_func=standard_attention,
         )
 
     @pytest.mark.parametrize("shape", [(128, 128), (2048, 128)])
     @pytest.mark.parametrize("dtype", [torch.float32])
-    @pytest.mark.parametrize("is_with_causal_mask", [False])
+    @pytest.mark.parametrize("enable_causal_mask", [False])
     def test_flash_attention_v1_triton(
         self,
         shape,
         dtype,
-        is_with_causal_mask,
+        enable_causal_mask,
     ):
         q = self.get_tensor(shape, dtype)
         k = self.get_tensor(shape, dtype)
@@ -222,7 +230,31 @@ class TestFlashAttention(TestAbc):
         self.invoke(
             [q, k, v],
             [out_flash],
-            kwargs={"is_with_causal_mask": is_with_causal_mask},
+            kwargs={"enable_causal_mask": enable_causal_mask},
             kernel_func=flash_attention_v1_triton,
             golden_func=flash_attention_v1,
+        )
+
+    @pytest.mark.parametrize("shape", [(128, 128), (2500, 128)])
+    @pytest.mark.parametrize("dtype", [torch.float32])
+    @pytest.mark.parametrize("enable_causal_mask", [False, True])
+    def test_flash_attention_v2_triton(
+        self,
+        shape,
+        dtype,
+        enable_causal_mask,
+    ):
+        q = self.get_tensor(shape, dtype)
+        k = self.get_tensor(shape, dtype)
+        v = self.get_tensor(shape, dtype)
+        out_flash = torch.zeros_like(q)
+
+        from src.attention.flash_attention import flash_attention_v2_triton
+
+        self.invoke(
+            [q, k, v],
+            [out_flash],
+            kwargs={"enable_causal_mask": enable_causal_mask},
+            kernel_func=flash_attention_v2_triton,
+            golden_func=standard_attention,
         )
