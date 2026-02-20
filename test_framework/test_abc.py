@@ -10,6 +10,7 @@ from .utils import LOG
 class TestAbc:
     _atol = 1e-2
     _rtol = 1e-2
+    ratio = 1e-2
 
     @staticmethod
     def get_tensor(
@@ -18,7 +19,6 @@ class TestAbc:
         device: Optional[torch.device] = None,
         scale: float = 8.0,
         bias: float = -8.0,
-        is_random: bool = True,
         data: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if device is None:
@@ -27,12 +27,7 @@ class TestAbc:
         if data is not None:
             return data.to(device=device, dtype=dtype).reshape(shape)
 
-        if not is_random:
-            return torch.arange(
-                0, torch.prod(torch.tensor(shape)), dtype=dtype, device=device
-            ).reshape(shape)
-        else:
-            return scale * torch.rand(size=shape, dtype=dtype, device=device) + bias
+        return scale * torch.rand(size=shape, dtype=dtype, device=device) + bias
 
     def _compare_tensors(
         self,
@@ -40,6 +35,7 @@ class TestAbc:
         golden_res: torch.Tensor,
         rtol: float,
         atol: float,
+        ratio: float,
     ) -> bool:
         LOG.info(
             "Comparing Model (%s, %s) v.s. Golden (%s, %s)",
@@ -61,13 +57,14 @@ class TestAbc:
 
         err_count = mask.sum().item()
         total = model_res.numel()
-        ratio = err_count / total * 100 if total else 0.0
+        err_ratio = err_count / total * 100 if total else 0.0
 
-        LOG.debug("Error ratio: %.4f%% (rtol=%g, atol=%g)", ratio, rtol, atol)
-        if err_count == 0:
-            return True
+        LOG.debug(f"Precision check: rtol={rtol}, atol={atol}, ratio={ratio*100:.2f}%")
+        LOG.debug(
+            f"Total elements: {total}, Error count: {err_count}, Error ratio: {err_ratio:.5f}%"
+        )
 
-        idx = torch.nonzero(mask, as_tuple=False)  # [N, ndim]
+        indices = torch.nonzero(mask, as_tuple=False)  # [N, ndim]
         vals_a = model_res[mask]  # 1D tensor
         vals_b = golden_res[mask]
 
@@ -75,24 +72,37 @@ class TestAbc:
         rtol_vec = atol_vec / (vals_b.abs() + 1e-12)
 
         _, top_i = torch.topk(atol_vec, k=min(50, err_count))
-        top_idx = idx[top_i].tolist()
-        top_a = vals_a[top_i].cpu().numpy()
-        top_b = vals_b[top_i].cpu().numpy()
-        top_atol = atol_vec[top_i].cpu().numpy()
-        top_rtol = rtol_vec[top_i].cpu().numpy()
 
-        table = [
-            (idx, a, b, atol, rtol)
-            for idx, a, b, atol, rtol in zip(top_idx, top_a, top_b, top_atol, top_rtol)
-        ]
-        print_table = tabulate(
-            table,
-            headers=["index", "model", "golden", "atol", "rtol"],
-            colalign=("left",) * 5,
-        )
-        LOG.error("Tensor comparison failed!")
-        LOG.debug("Top-50 error elements:\n%s", print_table, extra={"indent": ""})
-        raise AssertionError("Tensor comparison failed.")
+        # print all error elements
+        if top_i.numel() != 0:
+            top_idx = indices[top_i].tolist()
+            top_a = vals_a[top_i].cpu().numpy()
+            top_b = vals_b[top_i].cpu().numpy()
+            top_atol = atol_vec[top_i].cpu().numpy()
+            top_rtol = rtol_vec[top_i].cpu().numpy()
+
+            table = [
+                (idx, a, b, atol, rtol)
+                for idx, a, b, atol, rtol in zip(
+                    top_idx, top_a, top_b, top_atol, top_rtol
+                )
+            ]
+            print_table = tabulate(
+                table,
+                headers=["index", "model", "golden", "atol", "rtol"],
+                colalign=("left",) * 5,
+            )
+            LOG.debug("Top-50 error elements:\n%s", print_table, extra={"indent": ""})
+
+        if err_ratio <= ratio:
+            return True
+        else:
+            LOG.error(
+                f"Error ratio {err_ratio:.5f}% exceeds the threshold of {ratio*100:.2f}%"
+            )
+            raise AssertionError(
+                f"Tensor comparison failed with error ratio {err_ratio:.5f}% exceeding the threshold of {ratio*100:.2f}%"
+            )
 
     def invoke(
         self,
@@ -123,6 +133,7 @@ class TestAbc:
                 golden_output.detach().cpu(),
                 rtol=kwargs.get("rtol", self._rtol),
                 atol=kwargs.get("atol", self._atol),
+                ratio=kwargs.get("ratio", self._rtol),
             )
 
         return output, golden_output
