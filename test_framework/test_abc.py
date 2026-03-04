@@ -10,7 +10,7 @@ from .utils import LOG
 class TestAbc:
     _atol = 1e-2
     _rtol = 1e-2
-    ratio = 1e-2
+    _ratio = 1e-2
 
     @staticmethod
     def get_tensor(
@@ -33,9 +33,6 @@ class TestAbc:
         self,
         model_res: torch.Tensor,
         golden_res: torch.Tensor,
-        rtol: float,
-        atol: float,
-        ratio: float,
     ) -> bool:
         LOG.info(
             "Comparing Model (%s, %s) v.s. Golden (%s, %s)",
@@ -51,7 +48,9 @@ class TestAbc:
             raise ValueError(f"dtype mismatch: {model_res.dtype} vs {golden_res.dtype}")
 
         if model_res.is_floating_point() or golden_res.is_floating_point():
-            mask = ~torch.isclose(model_res, golden_res, rtol=rtol, atol=atol)
+            mask = ~torch.isclose(
+                model_res, golden_res, rtol=self._rtol, atol=self._atol
+            )
         else:
             mask = model_res != golden_res
 
@@ -59,7 +58,9 @@ class TestAbc:
         total = model_res.numel()
         err_ratio = err_count / total * 100 if total else 0.0
 
-        LOG.debug(f"Precision check: rtol={rtol}, atol={atol}, ratio={ratio*100:.2f}%")
+        LOG.debug(
+            f"Precision check: rtol={self._rtol}, atol={self._atol}, ratio={self._ratio*100:.2f}%"
+        )
         LOG.debug(
             f"Total elements: {total}, Error count: {err_count}, Error ratio: {err_ratio:.5f}%"
         )
@@ -94,21 +95,21 @@ class TestAbc:
             )
             LOG.debug("Top-50 error elements:\n%s", print_table, extra={"indent": ""})
 
-        if err_ratio <= ratio:
+        if err_ratio <= self._ratio:
             return True
         else:
             LOG.error(
-                f"Error ratio {err_ratio:.5f}% exceeds the threshold of {ratio*100:.2f}%"
+                f"Error ratio {err_ratio:.5f}% exceeds the threshold of {self._ratio*100:.2f}%"
             )
             raise AssertionError(
-                f"Tensor comparison failed with error ratio {err_ratio:.5f}% exceeding the threshold of {ratio*100:.2f}%"
+                f"Tensor comparison failed with error ratio {err_ratio:.5f}% exceeding the threshold of {self._atio*100:.2f}%"
             )
 
     def invoke(
         self,
         inputs: Tuple[torch.Tensor, ...],
         outputs: Tuple[torch.Tensor, ...],
-        kwargs: dict,
+        func_args: dict,
         kernel_func: callable = None,
         golden_func: callable = None,
         **options,
@@ -116,24 +117,21 @@ class TestAbc:
         LOG.info(f"Current PID: {os.getpid()}")
         LOG.info(f"Get inputs {[ (t.shape, t.dtype) for t in inputs ]}")
         LOG.info(f"Get output: {[ (t.shape, t.dtype) for t in outputs ]}")
-        LOG.info(f"Get kwargs: {kwargs}")
+        LOG.info(f"Get func_args: {func_args}")
 
         golden_outputs = [torch.empty_like(out) for out in outputs]
 
         LOG.info("Running golden function...")
-        golden_func(*inputs, *golden_outputs, **kwargs)
+        golden_func(*inputs, *golden_outputs, **func_args)
 
         LOG.info("Running kernel function...")
-        kernel_func(*inputs, *outputs, **kwargs)
+        kernel_func(*inputs, *outputs, **func_args)
 
         LOG.info("Comparing outputs...")
         for output, golden_output in zip(outputs, golden_outputs):
             self._compare_tensors(
                 output.detach().cpu(),
                 golden_output.detach().cpu(),
-                rtol=kwargs.get("rtol", self._rtol),
-                atol=kwargs.get("atol", self._atol),
-                ratio=kwargs.get("ratio", self._rtol),
             )
 
         return output, golden_output
@@ -142,7 +140,7 @@ class TestAbc:
         self,
         inputs: Tuple[torch.Tensor, ...],
         outputs: Tuple[torch.Tensor, ...],
-        kwargs: dict,
+        func_args: dict,
         kernel_func: callable = None,
         golden_func: callable = None,
         repeat: int = 100,
@@ -150,16 +148,16 @@ class TestAbc:
         LOG.info(f"Current PID: {os.getpid()}")
         LOG.info(f"Get inputs {[ (t.shape, t.dtype) for t in inputs ]}")
         LOG.info(f"Get output: {[ (t.shape, t.dtype) for t in outputs ]}")
-        LOG.info(f"Get kwargs: {kwargs}")
+        LOG.info(f"Get func_args: {func_args}")
 
         # Warm up
-        kernel_func(*inputs, *outputs, **kwargs)
+        kernel_func(*inputs, *outputs, **func_args)
 
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()
         for _ in range(repeat):
-            kernel_func(*inputs, *outputs, **kwargs)
+            kernel_func(*inputs, *outputs, **func_args)
         end.record()
         torch.cuda.synchronize()
         elapsed_time_ms = start.elapsed_time(end) / repeat

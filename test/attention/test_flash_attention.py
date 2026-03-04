@@ -1,10 +1,7 @@
 import pytest
 import torch
 
-from src.attention.flash_attention import (
-    flash_attention_v1_triton,
-    flash_attention_v2_triton,
-)
+from kernel import flash_attention_v1_triton, flash_attention_v2_triton
 from test_framework.test_abc import TestAbc
 
 
@@ -14,7 +11,7 @@ def standard_attention(
     value: torch.Tensor,
     output: torch.Tensor,
     enable_causal_mask: bool = False,
-    **kwargs,
+    **func_args,
 ) -> None:
     """
     A standard implementation of scaled dot-product attention.
@@ -51,7 +48,7 @@ def flash_attention_v1(
     value: torch.Tensor,
     output: torch.Tensor,
     enable_causal_mask: bool = False,
-    **kwargs,
+    **func_args,
 ) -> None:
     assert (
         query.dim() == 2 and key.dim() == 2 and value.dim() == 2 and output.dim() == 2
@@ -125,7 +122,7 @@ def flash_attention_v2(
     key: torch.Tensor,
     value: torch.Tensor,
     output: torch.Tensor,
-    **kwargs,
+    **func_args,
 ):
     TILE_Q = 32
     TILE_KV = 32
@@ -161,7 +158,7 @@ def flash_attention_v2(
                 / torch.sqrt(torch.tensor(d, dtype=DTYPE, device=DEVICE))
             )
 
-            if kwargs.get("enable_causal_mask", False):
+            if func_args.get("enable_causal_mask", False):
                 q_indices = torch.arange(start_q, start_q + tile_q_len, device=DEVICE)[
                     :, None
                 ]
@@ -210,7 +207,7 @@ class TestFlashAttention(TestAbc):
         self.invoke(
             [q, k, v],
             [out_flash],
-            kwargs={"enable_causal_mask": enable_causal_mask},
+            func_args={"enable_causal_mask": enable_causal_mask},
             kernel_func=kernel_func,
             golden_func=standard_attention,
         )
@@ -232,7 +229,7 @@ class TestFlashAttention(TestAbc):
         self.invoke(
             [q, k, v],
             [out_flash],
-            kwargs={"enable_causal_mask": enable_causal_mask},
+            func_args={"enable_causal_mask": enable_causal_mask},
             kernel_func=flash_attention_v1_triton,
             golden_func=standard_attention,
         )
@@ -254,7 +251,7 @@ class TestFlashAttention(TestAbc):
         self.invoke(
             [q, k, v],
             [out_flash],
-            kwargs={"enable_causal_mask": enable_causal_mask},
+            func_args={"enable_causal_mask": enable_causal_mask},
             kernel_func=flash_attention_v2_triton,
             golden_func=standard_attention,
         )
@@ -280,7 +277,7 @@ class TestFlashAttention(TestAbc):
         self.invoke_perf(
             [q, k, v],
             [out_flash],
-            kwargs={"enable_causal_mask": enable_causal_mask},
+            func_args={"enable_causal_mask": enable_causal_mask},
             kernel_func=kernel_func,
             golden_func=standard_attention,
         )
