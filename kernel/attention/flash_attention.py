@@ -62,7 +62,7 @@ def flash_attention_v1_kenerl(
             tl.store(out_ptr + tile_m_offset * D + offset, cur_out)
 
 
-def flash_attention_v1_triton(
+def flash_attention_v1(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -142,7 +142,7 @@ def flash_attention_v2_kenerl(
     tl.store(out_ptr + tile_q_offset * D + offset, cur_out, mask=mask_q)
 
 
-def flash_attention_v2_triton(
+def flash_attention_v2(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,

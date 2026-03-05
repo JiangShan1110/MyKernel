@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-from kernel import gemm_fp16_16_8_8_cuda
 from test_framework.test_abc import TestAbc
+from test_framework.utils import load_cutlass_extension
 
 
 def gemm_golden(
@@ -11,6 +11,18 @@ def gemm_golden(
     c: torch.Tensor,
 ) -> None:
     c.copy_(torch.matmul(a, b.T))
+
+
+def gemm_fp16_16_8_8_cuda(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    c: torch.Tensor | None = None,
+    **kwargs,
+) -> None:
+    ext = load_cutlass_extension(
+        "gemm_fp16_16_8_8_cuda", "kernel/gemm/cuda/gemm_fp16_16_8_8.cu"
+    )
+    ext.gemm_fp16_16_8_8(a, b, c)
 
 
 class TestGemmCutlass(TestAbc):

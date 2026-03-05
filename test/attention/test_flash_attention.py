@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from kernel import flash_attention_v1_triton, flash_attention_v2_triton
+from kernel.attention.flash_attention import flash_attention_v1, flash_attention_v2
 from test_framework.test_abc import TestAbc
 
 
@@ -215,7 +215,7 @@ class TestFlashAttention(TestAbc):
     @pytest.mark.parametrize("shape", [(128, 128), (2048, 128)])
     @pytest.mark.parametrize("dtype", [torch.float32])
     @pytest.mark.parametrize("enable_causal_mask", [False])
-    def test_flash_attention_v1_triton(
+    def test_flash_attention_v1(
         self,
         shape,
         dtype,
@@ -230,14 +230,14 @@ class TestFlashAttention(TestAbc):
             [q, k, v],
             [out_flash],
             func_args={"enable_causal_mask": enable_causal_mask},
-            kernel_func=flash_attention_v1_triton,
+            kernel_func=flash_attention_v1,
             golden_func=standard_attention,
         )
 
     @pytest.mark.parametrize("shape", [(128, 128), (2500, 128)])
     @pytest.mark.parametrize("dtype", [torch.float32])
     @pytest.mark.parametrize("enable_causal_mask", [False, True])
-    def test_flash_attention_v2_triton(
+    def test_flash_attention_v2(
         self,
         shape,
         dtype,
@@ -252,16 +252,14 @@ class TestFlashAttention(TestAbc):
             [q, k, v],
             [out_flash],
             func_args={"enable_causal_mask": enable_causal_mask},
-            kernel_func=flash_attention_v2_triton,
+            kernel_func=flash_attention_v2,
             golden_func=standard_attention,
         )
 
     @pytest.mark.parametrize("shape", [(4096, 128)])
     @pytest.mark.parametrize("dtype", [torch.float32])
     @pytest.mark.parametrize("enable_causal_mask", [False])
-    @pytest.mark.parametrize(
-        "kernel_func", [flash_attention_v1_triton, flash_attention_v2_triton]
-    )
+    @pytest.mark.parametrize("kernel_func", [flash_attention_v1, flash_attention_v2])
     def test_flash_attention_perf(
         self,
         shape,

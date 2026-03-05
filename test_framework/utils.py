@@ -29,7 +29,6 @@ def load_cutlass_extension(
     dump_file: bool = False,
 ) -> Any:
     cutlass_root = DIR / "third_party" / "cutlass"
-    project_include_dir = DIR / "kernel" / "c"
     include_dir = cutlass_root / "include"
     util_include_dir = cutlass_root / "tools" / "util" / "include"
 
@@ -71,7 +70,6 @@ def load_cutlass_extension(
         name=name,
         sources=[str(source_file)],
         extra_include_paths=[
-            str(project_include_dir),
             str(include_dir),
             str(util_include_dir),
         ],
