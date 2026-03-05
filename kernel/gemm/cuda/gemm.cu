@@ -60,7 +60,14 @@ void gemm_f16(torch::Tensor a, torch::Tensor b, torch::Tensor c, float alpha,
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("gemm_f16", &gemm_f16, pybind11::arg("a"), pybind11::arg("b"),
-        pybind11::arg("c"), pybind11::arg("alpha") = 1.0f,
-        pybind11::arg("beta") = 0.0f);
+  m.def(
+    "gemm_f16", 
+    &gemm_f16, 
+    pybind11::arg("a"), 
+    pybind11::arg("b"),
+    pybind11::arg("c"), 
+    pybind11::arg("alpha") = 1.0f,
+    pybind11::arg("beta") = 0.0f,
+    "Run Cutlass Tmpl Gemm"
+  );
 }

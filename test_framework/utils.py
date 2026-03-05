@@ -1,7 +1,15 @@
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
+import torch
+from torch.utils.cpp_extension import load
+
 LOG = logging.getLogger(__name__)
+DIR = Path("/root/MyKernel")
+ARCH = ".".join(map(str, torch.cuda.get_device_capability()))
+os.environ["TORCH_CUDA_ARCH_LIST"] = ARCH
 
 
 def make_json_friendly(obj: Any) -> Any:
@@ -14,54 +22,49 @@ def make_json_friendly(obj: Any) -> Any:
     return str(obj)
 
 
-class CudaDeviceInfo:
-    #  CUDA Device Query (Runtime API) version (CUDART static linking)
+def load_cutlass_extension(name, source_file):
+    cutlass_root = DIR / "third_party" / "cutlass"
+    include_dir = cutlass_root / "include"
+    util_include_dir = cutlass_root / "tools" / "util" / "include"
 
-    # Detected 1 CUDA Capable device(s)
+    build_dir = DIR / "build" / name
+    os.makedirs(build_dir, exist_ok=True)
 
-    # Device 0: "NVIDIA GeForce RTX 3060 Laptop GPU"
-    #   CUDA Driver Version / Runtime Version          12.6 / 12.6
-    #   CUDA Capability Major/Minor version number:    8.6
-    #   Total amount of global memory:                 6144 MBytes (6441926656 bytes)
-    #   (030) Multiprocessors, (128) CUDA Cores/MP:    3840 CUDA Cores
-    #   GPU Max Clock rate:                            1282 MHz (1.28 GHz)
-    #   Memory Clock rate:                             6001 Mhz
-    #   Memory Bus Width:                              192-bit
-    #   L2 Cache Size:                                 3145728 bytes
-    #   Maximum Texture Dimension Size (x,y,z)         1D=(131072), 2D=(131072, 65536), 3D=(16384, 16384, 16384)
-    #   Maximum Layered 1D Texture Size, (num) layers  1D=(32768), 2048 layers
-    #   Maximum Layered 2D Texture Size, (num) layers  2D=(32768, 32768), 2048 layers
-    #   Total amount of constant memory:               65536 bytes
-    #   Total amount of shared memory per block:       49152 bytes
-    #   Total shared memory per multiprocessor:        102400 bytes
-    #   Total number of registers available per block: 65536
-    #   Warp size:                                     32
-    #   Maximum number of threads per multiprocessor:  1536
-    #   Maximum number of threads per block:           1024
-    #   Max dimension size of a thread block (x,y,z): (1024, 1024, 64)
-    #   Max dimension size of a grid size    (x,y,z): (2147483647, 65535, 65535)
-    #   Maximum memory pitch:                          2147483647 bytes
-    #   Texture alignment:                             512 bytes
-    #   Concurrent copy and kernel execution:          Yes with 1 copy engine(s)
-    #   Run time limit on kernels:                     Yes
-    #   Integrated GPU sharing Host Memory:            No
-    #   Support host page-locked memory mapping:       Yes
-    #   Alignment requirement for Surfaces:            Yes
-    #   Device has ECC support:                        Disabled
-    #   Device supports Unified Addressing (UVA):      Yes
-    #   Device supports Managed Memory:                Yes
-    #   Device supports Compute Preemption:            Yes
-    #   Supports Cooperative Kernel Launch:            Yes
-    #   Supports MultiDevice Co-op Kernel Launch:      No
-    #   Device PCI Domain ID / Bus ID / location ID:   0 / 1 / 0
-    #   Compute Mode:
-    #      < Default (multiple host threads can use ::cudaSetDevice() with device simultaneously) >
-
-    # deviceQuery, CUDA Driver = CUDART, CUDA Driver Version = 12.6, CUDA Runtime Version = 12.6, NumDevs = 1
-    # Result = PASS
-
-    CLUSTER_NUM = 30
-    CUDA_CORE_PER_CLUSTER = 128
-    TOTAL_CUDA_CORE_NUM = 3840
-    MAX_THREADS_PER_BLOCK = 1024
-    WARP_SIZE = 32
+    return load(
+        name=name,
+        sources=[str(source_file)],
+        extra_include_paths=[str(include_dir), str(util_include_dir)],
+        extra_cflags=["-std=c++17"],
+        verbose=True,  # show compile logs
+        extra_cuda_cflags=[
+            "-O3",
+            "--use_fast_math",
+            "-U__CUDA_NO_HALF_OPERATORS__",
+            "-U__CUDA_NO_HALF_CONVERSIONS__",
+            "-U__CUDA_NO_HALF2_OPERATORS__",
+            "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+            "--expt-relaxed-constexpr",
+            "--expt-extended-lambda",
+            "--use_fast_math",
+            "--ftemplate-backtrace-limit=0",  # To debug template code
+            "--resource-usage",  # printing out number of registers
+            # "--ptxas-options=--verbose,--register-usage-level=5,--warn-on-local-memory-usage",  # printing out number of registers
+            "--generate-line-info",  # show PTX and SASS in ncu
+            "-DCUTE_SM90_EXTENDED_MMA_SHAPES_ENABLED",
+            "-DCUTLASS_ENABLE_GDC_FOR_SM90",  # For PDL
+            "-DCUTLASS_ENABLE_GDC_FOR_SM100",  # For PDL
+            "-DCUTLASS_DEBUG_TRACE_LEVEL=0",  # Can toggle for debugging
+            "-DNDEBUG",  # Important, otherwise performance is severely impacted
+            "-Xfatbin",  # compress all binary sections
+            "-compress-all",
+            # dump file
+            "-keep",
+            "--keep-dir",
+            f"{build_dir}",
+            # for debug purpose
+            # "-G", # device debug
+            # "-g", # host debug
+            # "-Xcompiler",
+            # "-rdynamic",
+        ],
+    )

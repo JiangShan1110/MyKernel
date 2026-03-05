@@ -1,6 +1,6 @@
 import torch
 
-from kernel.utils import load_cutlass_extension
+from test_framework.utils import load_cutlass_extension
 
 
 def gemm_f16_cuda(
