@@ -102,7 +102,7 @@ class TestAbc:
                 f"Error ratio {err_ratio:.5f}% exceeds the threshold of {self._ratio*100:.2f}%"
             )
             raise AssertionError(
-                f"Tensor comparison failed with error ratio {err_ratio:.5f}% exceeding the threshold of {self._atio*100:.2f}%"
+                f"Tensor comparison failed with error ratio {err_ratio:.2f}% exceeding the threshold of {self._ratio*100:.2f}%"
             )
 
     def invoke(

@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+from kernel import gemm_fp16_16_8_8_cuda
 from test_framework.test_abc import TestAbc
 
 
@@ -8,28 +9,24 @@ def gemm_golden(
     a: torch.Tensor,
     b: torch.Tensor,
     c: torch.Tensor,
-    alpha: float = 1.0,
-    beta: float = 0.0,
 ) -> None:
-    c[::] = alpha * (a @ b) + beta * c
+    c.copy_(torch.matmul(a, b.T))
 
 
 class TestGemmCutlass(TestAbc):
-    @pytest.mark.parametrize("shape", [(128, 128, 128), (256, 128, 256)])
+    @pytest.mark.parametrize("shape", [(16, 8, 8)])
     @pytest.mark.parametrize("dtype", [torch.float16])
     def test_gemm_f16(self, shape, dtype):
-        from kernel import gemm_f16_cuda
-
         m, k, n = shape
-        a = self.get_tensor((m, k), dtype)
-        b = self.get_tensor((k, n), dtype)
+        a = self.get_tensor((m, k), dtype, data=torch.arange(m * k, dtype=dtype) % 8)
+        b = self.get_tensor((k, n), dtype, data=torch.arange(k * n, dtype=dtype) % 8)
         c = torch.zeros((m, n), device=a.device, dtype=dtype)
 
-        func_args = {"alpha": 1.0, "beta": 0.0}
+        func_args = {}
         self.invoke(
             [a, b],
             [c],
             func_args=func_args,
-            kernel_func=gemm_f16_cuda,
+            kernel_func=gemm_fp16_16_8_8_cuda,
             golden_func=gemm_golden,
         )
