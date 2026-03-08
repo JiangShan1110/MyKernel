@@ -31,6 +31,7 @@ def load_cutlass_extension(
     cutlass_root = DIR / "third_party" / "cutlass"
     include_dir = cutlass_root / "include"
     util_include_dir = cutlass_root / "tools" / "util" / "include"
+    file_path = DIR / source_file
 
     cflags = [
         "-O3",
@@ -68,7 +69,7 @@ def load_cutlass_extension(
 
     return load(
         name=name,
-        sources=[str(source_file)],
+        sources=[str(file_path)],
         extra_include_paths=[
             str(include_dir),
             str(util_include_dir),
