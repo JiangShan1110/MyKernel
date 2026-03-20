@@ -26,7 +26,7 @@ def gemm_fp16_16_8_8_cuda(
 
 
 class TestGemmCutlass(TestAbc):
-    @pytest.mark.parametrize("shape", [(64, 64, 16)])
+    @pytest.mark.parametrize("shape", [(128, 128, 32)])
     @pytest.mark.parametrize("dtype", [torch.float16])
     def test_gemm_f16(self, shape, dtype):
         m, n, k = shape

@@ -13,9 +13,9 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   using T = typename Config::T;
   using TiledMMA = typename Config::TiledMMA;
 
-  constexpr int kBlockTiledM = Config::kBlockTiledM;
-  constexpr int kBlockTiledN = Config::kBlockTiledN;
-  constexpr int kBlockTiledK = Config::kBlockTiledK;
+  constexpr int kBlockM = Config::kBlockM;
+  constexpr int kBlockN = Config::kBlockN;
+  constexpr int kBlockK = Config::kBlockK;
   
   // In software, 128 thread
   // In hardware, 4 warps, each warp has 32 threads
@@ -26,7 +26,7 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   Tensor mB = make_tensor(make_gmem_ptr((T *)Bptr), make_shape(n, k), make_stride(k, Int<1>{}));
   Tensor mC = make_tensor(make_gmem_ptr((T *)Cptr), make_shape(m, n), make_stride(n, Int<1>{}));
 
-  auto tiler = make_tile(Int<kBlockTiledM>{}, Int<kBlockTiledN>{}, Int<kBlockTiledK>{});
+  auto tiler = make_tile(Int<kBlockM>{}, Int<kBlockN>{}, Int<kBlockK>{});
   auto coord = make_coord(0, 0, 0);
   
   // the data that the block will process
@@ -92,12 +92,21 @@ template <typename T_> struct KernelSpec {
   constexpr static int kBlockTiledM = kWarpM * kWarpTiledM;
   constexpr static int kBlockTiledN = kWarpN * kWarpTiledN;
   constexpr static int kBlockTiledK = kWarpK * kWarpTiledK;
+
+  // for m in (2)
+  //  for n in (2)
+  //    for k int (2)
+  //      Tiled MMA
+  constexpr static int kBlockM = kBlockTiledM * 2;
+  constexpr static int kBlockN = kBlockTiledN * 2;
+  constexpr static int kBlockK = kBlockTiledK * 2;
+
   
   // warp nums
   using MMAThrLayout = decltype(make_layout(make_shape(Int<kWarpM>{}, Int<kWarpN>{}, Int<kWarpK>{}),
                                             make_stride(Int<kWarpN * kWarpK>{}, Int<kWarpK>{}, Int<1>{})));
-  // tiled per warp
-  using Permutations = Tile<Int<kWarpTiledM>, Int<kWarpTiledN>, Int<kWarpTiledK>>;
+  // tiled per block
+  using Permutations = Tile<Int<kBlockTiledM>, Int<kBlockTiledN>, Int<kBlockTiledK>>;
   using TiledMMA = decltype(make_tiled_mma(MMAInstr{}, MMAThrLayout{}, Permutations{}));
 
 
@@ -135,9 +144,9 @@ void run_gemm(const torch::Tensor &a, const torch::Tensor &b, torch::Tensor &c) 
   
   using Config = typename Config::template KernelSpec<ComputeType>;
 
-  static constexpr int M = Config::kBlockTiledM;
-  static constexpr int N = Config::kBlockTiledN;
-  static constexpr int K = Config::kBlockTiledK;
+  static constexpr int M = Config::kBlockM;
+  static constexpr int N = Config::kBlockN;
+  static constexpr int K = Config::kBlockK;
 
   TORCH_CHECK(a.size(0) == M && a.size(1) == K, "Tensor a must be of shape (", M, ", ", K, ").");
   TORCH_CHECK(b.size(0) == N && b.size(1) == K, "Tensor b must be of shape (", N, ", ", K, ").");
