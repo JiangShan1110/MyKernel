@@ -5,6 +5,37 @@
 #include <torch/types.h>
 #include <cute/util/print.hpp>
 
+#define TIME_CUDA_KERNEL(stream, ...)                                   \
+    do {                                                                \
+        cudaEvent_t __start, __stop;                                    \
+        cudaEventCreate(&__start);                                      \
+        cudaEventCreate(&__stop);                                       \
+        cudaDeviceSynchronize();                                        \
+                                                                        \
+        cudaEventRecord(__start, stream);                               \
+        {                                                               \
+            __VA_ARGS__;                                                \
+        }                                                               \
+        cudaEventRecord(__stop, stream);                                \
+        cudaDeviceSynchronize();                                        \
+                                                                        \
+        auto __error = cudaGetLastError();                              \
+        if (__error != cudaSuccess) {                                   \
+            cudaEventDestroy(__start);                                  \
+            cudaEventDestroy(__stop);                                   \
+            throw std::runtime_error(                                   \
+                std::string("CUDA error: ") + cudaGetErrorString(__error) + \
+                " (error code: " + std::to_string(__error) + ")");  \
+        }                                                               \
+                                                                        \
+        float __milliseconds = 0;                                       \
+        cudaEventElapsedTime(&__milliseconds, __start, __stop);         \
+        printf("Kernel execution time: %.3f ms\n", __milliseconds);     \
+                                                                        \
+        cudaEventDestroy(__start);                                      \
+        cudaEventDestroy(__stop);                                       \
+    } while(0)
+
 template <typename Config>
 __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr, int m, int n, int k) {
   using namespace cute;
@@ -158,36 +189,11 @@ void run_gemm(const torch::Tensor &a, const torch::Tensor &b, torch::Tensor &c) 
   dim3 grid(1, 1, 1);
   int shm_size = Config::kShmSize;
 
-  printf("Block Size: (%d, %d, %d) | Grid Size: (%d, %d, %d) | Shared Memory Size: %d Bytes\n", block.x, block.y,
-         block.z, grid.x, grid.y, grid.z, shm_size);
-
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  cudaDeviceSynchronize();
-
-  // Kernel launch
-  cudaEventRecord(start, stream);
-
-  gemm_fp16_16_8_8<Config><<<grid, block, shm_size, stream>>>(
+  TIME_CUDA_KERNEL(stream,
+    gemm_fp16_16_8_8<Config><<<grid, block, shm_size, stream>>>(
       reinterpret_cast<AccType *>(c.data_ptr()), reinterpret_cast<ComputeType *>(a.data_ptr()),
-      reinterpret_cast<ComputeType *>(b.data_ptr()), M, N, K);
-
-  cudaEventRecord(stop, stream);
-  cudaDeviceSynchronize();
-
-  auto error = cudaGetLastError();
-  if (error != cudaSuccess) {
-    throw std::runtime_error(std::string("CUDA error: ") + cudaGetErrorString(error) +
-                             " (error code: " + std::to_string(error) + ")");
-  }
-  
-  float milliseconds = 0;
-  cudaEventElapsedTime(&milliseconds, start, stop);
-  printf("Kernel execution time: %.3f ms\n", milliseconds);
-
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
+      reinterpret_cast<ComputeType *>(b.data_ptr()), M, N, K)
+  );
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

@@ -7,6 +7,37 @@
 
 using namespace cute;
 
+#define TIME_CUDA_KERNEL(stream, ...)                                   \
+    do {                                                                \
+        cudaEvent_t __start, __stop;                                    \
+        cudaEventCreate(&__start);                                      \
+        cudaEventCreate(&__stop);                                       \
+        cudaDeviceSynchronize();                                        \
+                                                                        \
+        cudaEventRecord(__start, stream);                               \
+        {                                                               \
+            __VA_ARGS__;                                                \
+        }                                                               \
+        cudaEventRecord(__stop, stream);                                \
+        cudaDeviceSynchronize();                                        \
+                                                                        \
+        auto __error = cudaGetLastError();                              \
+        if (__error != cudaSuccess) {                                   \
+            cudaEventDestroy(__start);                                  \
+            cudaEventDestroy(__stop);                                   \
+            throw std::runtime_error(                                   \
+                std::string("CUDA error: ") + cudaGetErrorString(__error) + \
+                " (error code: " + std::to_string(__error) + ")");  \
+        }                                                               \
+                                                                        \
+        float __milliseconds = 0;                                       \
+        cudaEventElapsedTime(&__milliseconds, __start, __stop);         \
+        printf("Kernel execution time: %.3f ms\n", __milliseconds);     \
+                                                                        \
+        cudaEventDestroy(__start);                                      \
+        cudaEventDestroy(__stop);                                       \
+    } while(0)
+
 // template <typename T>
 // __global__ void transpose_kernel(void *Bptr, const void *Aptr, int m, int n) {
 
@@ -68,8 +99,8 @@ void run_trans(const torch::Tensor &a, torch::Tensor &b){
 
     TORCH_CHECK(a_sizes.size() == 2, "a should be 2D");
     TORCH_CHECK(a_sizes[0] == b_sizes[1] && a_sizes[1] == b_sizes[0], "a and b should be transposes of each other");
-    TORCH_CHECK(a.dtype() == torch::kFloat16, "a should be float16");
-    TORCH_CHECK(b.dtype() == torch::kFloat16, "b should be float16");
+    TORCH_CHECK(a.dtype() == torch::kFloat32, "a should be float32");
+    TORCH_CHECK(b.dtype() == torch::kFloat32, "b should be float32");
 
     int M = a_sizes[0];
     int N = a_sizes[1];
@@ -81,7 +112,9 @@ void run_trans(const torch::Tensor &a, torch::Tensor &b){
 
     dim3 blockDim(32, 8);
     dim3 gridDim((N + 31) / 32, (M + 7) / 8);
-    transpose_swizzle_kernel<cute::half_t, 32, 32><<<gridDim, blockDim>>>(reinterpret_cast<void *>(b.data_ptr()), reinterpret_cast<const void *>(a.data_ptr()), M, N);
+    TIME_CUDA_KERNEL(cudaStreamDefault,
+        transpose_swizzle_kernel<float, 32, 32><<<gridDim, blockDim>>>(reinterpret_cast<void *>(b.data_ptr()), reinterpret_cast<const void *>(a.data_ptr()), M, N)
+    );
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

@@ -31,7 +31,7 @@ class TestTranspose(TestAbc):
         request,
         shape,
     ):
-        a = self.get_tensor(shape, torch.float16)
+        a = self.get_tensor(shape, torch.float32)
         b = torch.zeros((shape[1], shape[0]), device=a.device, dtype=a.dtype)
 
         self.invoke(
