@@ -85,10 +85,6 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   TiledMMA tiled_mma;
   ThrMMA thr_mma = tiled_mma.get_slice(tid);
   
-  // the data of glm that the thread will process
-  Tensor tCgA = thr_mma.partition_A(gA);  // 32
-  Tensor tCgB = thr_mma.partition_B(gB);  // 32
-  Tensor tCgC = thr_mma.partition_C(gC);  // 16
 
   // the register that the thread will use to store the data
   Tensor tCrA = thr_mma.partition_fragment_A(gA); 
@@ -109,14 +105,6 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   Tensor tBgB_g2s = thr_copy_b_g2s.partition_S(gB);
   Tensor tBsB_g2s = thr_copy_b_g2s.partition_D(sB);
 
-  copy(tiled_copy_a_g2s, tAgA_g2s, tAsA_g2s);
-  copy(tiled_copy_b_g2s, tBgB_g2s, tBsB_g2s);
-
-  cp_async_fence();
-  cp_async_wait<0>();
-
-  __syncthreads();
-
   TiledCopyAS2R tiled_copy_a_s2r;
   ThrCopy thr_copy_a_s2r = tiled_copy_a_s2r.get_slice(tid);
   Tensor tAsA_s2r = thr_copy_a_s2r.partition_S(sA);
@@ -127,16 +115,27 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   Tensor tBsB_s2r = thr_copy_b_s2r.partition_S(sB);
   Tensor tCrB_s2r = thr_copy_b_s2r.retile_D(tCrB);
 
+  TiledCopyCR2G tiled_copy_c_r2g;
+  ThrCopy thr_copy_c_r2g = tiled_copy_c_r2g.get_slice(tid);
+  Tensor tCrC_r2g = thr_copy_c_r2g.retile_S(tCrC);
+  Tensor tCgC_r2g = thr_copy_c_r2g.partition_D(gC);
+
+  copy(tiled_copy_a_g2s, tAgA_g2s, tAsA_g2s);
+  copy(tiled_copy_b_g2s, tBgB_g2s, tBsB_g2s);
+
+  cp_async_fence();
+  cp_async_wait<0>();
+
+  __syncthreads();
+
+
   copy(tiled_copy_a_s2r, tAsA_s2r, tCrA_s2r);
   copy(tiled_copy_b_s2r, tBsB_s2r, tCrB_s2r);
 
   clear(tCrC);
   gemm(tiled_mma, tCrC, tCrA, tCrB, tCrC);
 
-  TiledCopyCR2G tiled_copy_c_r2g;
-  ThrCopy thr_copy_c_r2g = tiled_copy_c_r2g.get_slice(tid);
-  Tensor tCrC_r2g = thr_copy_c_r2g.retile_S(tCrC);
-  Tensor tCgC_r2g = thr_copy_c_r2g.partition_D(gC);
+  
 
   copy(tiled_copy_c_r2g, tCrC_r2g, tCgC_r2g);
 }
@@ -170,17 +169,22 @@ template <typename T_> struct KernelSpec {
   constexpr static int kWarpN = 2;
   constexpr static int kWarpK = 1;
   
-  // block tiled: 64 64 16
-  constexpr static int kBlockTiledM = kWarpM * kWarpTiledM;
-  constexpr static int kBlockTiledN = kWarpN * kWarpTiledN;
-  constexpr static int kBlockTiledK = kWarpK * kWarpTiledK;
+  // Tiled mma: 64 64 16
+  constexpr static int kTiledMmaM = kWarpM * kWarpTiledM; // 64
+  constexpr static int kTiledMmaN = kWarpN * kWarpTiledN; // 64
+  constexpr static int kTiledMmaK = kWarpK * kWarpTiledK; // 16
+  
+  // block tiled: 128 128 32
+  constexpr static int kBlockTiledM = kTiledMmaM * 2;
+  constexpr static int kBlockTiledN = kTiledMmaN * 2;
+  constexpr static int kBlockTiledK = kTiledMmaK * 2;
 
   
   // warp nums
   using MMAThrLayout = decltype(make_layout(make_shape(Int<kWarpM>{}, Int<kWarpN>{}, Int<kWarpK>{}),
                                             make_stride(Int<kWarpN * kWarpK>{}, Int<kWarpK>{}, Int<1>{})));
-  // tiled per block
-  using Permutations = Tile<Int<kBlockTiledM>, Int<kBlockTiledN>, Int<kBlockTiledK>>;
+  // size of tiled mma 
+  using Permutations = Tile<Int<kTiledMmaM>, Int<kTiledMmaN>, Int<kTiledMmaK>>;
   using TiledMMA = decltype(make_tiled_mma(MMAInstr{}, MMAThrLayout{}, Permutations{}));
 
   static constexpr int kWarpThrNum = 32;
@@ -196,7 +200,7 @@ template <typename T_> struct KernelSpec {
   using CopyBG2SAtom = Copy_Atom<CopyG2SInstr, T>;
 
   static constexpr int kElement = 8;
-  static constexpr int kBlockCopyKThr = kBlockTiledK / kElement; // 16/8=2
+  static constexpr int kBlockCopyKThr = kBlockTiledK / kElement; // 32/8=4
   
   using TiledCopyAG2S = decltype(make_tiled_copy(CopyAG2SAtom{}, 
                                                 make_layout(make_shape(Int<kThreadNum / kBlockCopyKThr>{}, Int<kBlockCopyKThr>{}),
