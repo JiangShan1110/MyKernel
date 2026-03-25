@@ -50,6 +50,10 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   using SmemALayout = typename Config::SmemALayout;
   using SmemBLayout = typename Config::SmemBLayout;
   using TiledCopyCR2G = typename Config::TiledCopyCR2G;
+  
+  constexpr int kLoopM = Config::kLoopM;
+  constexpr int kLoopN = Config::kLoopN;
+  constexpr int kLoopK = Config::kLoopK;
 
   constexpr int kBlockM = Config::kBlockTiledM;
   constexpr int kBlockN = Config::kBlockTiledN;
@@ -69,11 +73,11 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   int n_idx = blockIdx.y;
   auto coord = make_coord(m_idx, n_idx, _);
 
-  int loop_k = k / kBlockK;
+  int l1_k_loop = k / kBlockK;
   
   // the data that the block will process
-  Tensor gA = local_tile(mA, tiler, coord, Step<_1, X, _1>{}); // (128, 32), loop_k
-  Tensor gB = local_tile(mB, tiler, coord, Step<X, _1, _1>{}); // (128, 32), loop_k
+  Tensor gA = local_tile(mA, tiler, coord, Step<_1, X, _1>{}); // (128, 32), l1_k_loop
+  Tensor gB = local_tile(mB, tiler, coord, Step<X, _1, _1>{}); // (128, 32), l1_k_loop
   Tensor gC = local_tile(mC, tiler, coord, Step<_1, _1, X>{}); // (128, 128)
 
   extern __shared__ __align__(1024) uint8_t smem[];
@@ -98,13 +102,13 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   TiledCopyAG2S tiled_copy_a_g2s;
   ThrCopy thr_copy_a_g2s = tiled_copy_a_g2s.get_slice(tid);
   // src glm
-  Tensor tAgA_g2s = thr_copy_a_g2s.partition_S(gA); // (32, 32), 4, 1, loop_k
+  Tensor tAgA_g2s = thr_copy_a_g2s.partition_S(gA); // (32, 32), 4, 1, l1_k_loop
   // dst smem
   Tensor tAsA_g2s = thr_copy_a_g2s.partition_D(sA); // (32, 32), 4, 1
 
   TiledCopyBG2S tiled_copy_b_g2s;
   ThrCopy thr_copy_b_g2s = tiled_copy_b_g2s.get_slice(tid);
-  Tensor tBgB_g2s = thr_copy_b_g2s.partition_S(gB); // (32, 32), 4, 1, loop_k
+  Tensor tBgB_g2s = thr_copy_b_g2s.partition_S(gB); // (32, 32), 4, 1, l1_k_loop
   Tensor tBsB_g2s = thr_copy_b_g2s.partition_D(sB); // (32, 32), 4, 1
 
   TiledCopyAS2R tiled_copy_a_s2r;
@@ -124,21 +128,44 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
 
   clear(tCrC);
 
-  for (int itile = 0; itile < loop_k; ++itile) {
+  for (int l1_k_idx = 0; l1_k_idx < l1_k_loop; ++l1_k_idx) {
     // copy a tile of A and B from global memory to shared memory
-    copy(tiled_copy_a_g2s, tAgA_g2s(_,_,_,itile), tAsA_g2s);
-    copy(tiled_copy_b_g2s, tBgB_g2s(_,_,_,itile), tBsB_g2s);
+    copy(tiled_copy_a_g2s, tAgA_g2s(_,_,_,l1_k_idx), tAsA_g2s);
+    copy(tiled_copy_b_g2s, tBgB_g2s(_,_,_,l1_k_idx), tBsB_g2s);
 
     cp_async_fence();
     cp_async_wait<0>();
     __syncthreads();
 
-    copy(tiled_copy_a_s2r, tAsA_s2r, tCrA_s2r);
-    copy(tiled_copy_b_s2r, tBsB_s2r, tCrB_s2r);
+    // copy(tiled_copy_a_s2r, tAsA_s2r, tCrA_s2r);
+    // copy(tiled_copy_b_s2r, tBsB_s2r, tCrB_s2r);
 
-    gemm(tiled_mma, tCrC, tCrA, tCrB, tCrC);
+    // gemm(tiled_mma, tCrC, tCrA, tCrB, tCrC);
 
-    copy(tiled_copy_c_r2g, tCrC_r2g, tCgC_r2g);
+    // copy(tiled_copy_c_r2g, tCrC_r2g, tCgC_r2g);
+    
+    int l0_m_loop = size<1>(tAsA_s2r);
+    int l0_n_loop = size<1>(tBsB_s2r);
+    int l0_k_loop = size<2>(tAsA_s2r); // or size<2>(tCrB)
+    for (int l0_m_idx = 0; l0_m_idx < l0_m_loop; ++l0_m_idx) {
+      for (int l0_n_idx = 0; l0_n_idx < l0_n_loop; ++l0_n_idx) {
+        for (int l0_k_idx = 0; l0_k_idx < l0_k_loop; ++l0_k_idx) {
+          copy(tiled_copy_a_s2r, tAsA_s2r(_, l0_m_idx, l0_k_idx), tCrA_s2r(_, l0_m_idx, l0_k_idx));
+          copy(tiled_copy_b_s2r, tBsB_s2r(_, l0_n_idx, l0_k_idx), tCrB_s2r(_, l0_n_idx, l0_k_idx));
+          
+          
+          for (int mme_m_idx = l0_m_idx * kLoopM; mme_m_idx < (l0_m_idx + 1) * kLoopM; ++mme_m_idx) {
+            for (int mme_n_idx = l0_n_idx * kLoopN; mme_n_idx < (l0_n_idx + 1) * kLoopN; ++mme_n_idx) {
+              for (int mme_k_idx = l0_k_idx * kLoopK; mme_k_idx < (l0_k_idx + 1) * kLoopK; ++mme_k_idx) {
+                gemm(tiled_mma, tCrC(_, mme_m_idx, mme_n_idx), tCrA(_, mme_m_idx, mme_k_idx), tCrB(_, mme_n_idx, mme_k_idx), tCrC(_, mme_m_idx, mme_n_idx));
+              }
+            }
+          }
+
+          copy(tiled_copy_c_r2g, tCrC_r2g(_, l0_m_idx, l0_n_idx), tCgC_r2g(_, l0_m_idx, l0_n_idx));
+        }
+      }
+    }
   }
 }
 
@@ -176,16 +203,12 @@ template <typename T_> struct KernelSpec {
   constexpr static int kTiledMmaN = kWarpN * kWarpTiledN; // 64
   constexpr static int kTiledMmaK = kWarpK * kWarpTiledK; // 16
   
-  // block tiled: 128 128 32
-  constexpr static int kBlockTiledM = kTiledMmaM * 2;
-  constexpr static int kBlockTiledN = kTiledMmaN * 2;
-  constexpr static int kBlockTiledK = kTiledMmaK * 2;
-
   
   // warp nums
   using MMAThrLayout = decltype(make_layout(make_shape(Int<kWarpM>{}, Int<kWarpN>{}, Int<kWarpK>{}),
                                             make_stride(Int<kWarpN * kWarpK>{}, Int<kWarpK>{}, Int<1>{})));
   // size of tiled mma 
+  // l0 size of block: 64 64 16
   using Permutations = Tile<Int<kTiledMmaM>, Int<kTiledMmaN>, Int<kTiledMmaK>>;
   using TiledMMA = decltype(make_tiled_mma(MMAInstr{}, MMAThrLayout{}, Permutations{}));
 
@@ -193,6 +216,10 @@ template <typename T_> struct KernelSpec {
   // thread nums per block
   static constexpr int kThreadNum = size(TiledMMA{});
 
+  // l1 size of block: 128 128 32
+  constexpr static int kBlockTiledM = kTiledMmaM * 2;
+  constexpr static int kBlockTiledN = kTiledMmaN * 2;
+  constexpr static int kBlockTiledK = kTiledMmaK * 2;
 
   // CACHEALWAYS: data will be cached in L1 cache
   // CACHEGLOBAL: bypassing L1 cache
@@ -204,6 +231,7 @@ template <typename T_> struct KernelSpec {
   static constexpr int kElement = 8;
   static constexpr int kBlockCopyKThr = kBlockTiledK / kElement; // 32/8=4
   
+  // G->S: l1 tiled
   using TiledCopyAG2S = decltype(make_tiled_copy(CopyAG2SAtom{}, 
                                                 make_layout(make_shape(Int<kThreadNum / kBlockCopyKThr>{}, Int<kBlockCopyKThr>{}),
                                                               make_stride(Int<kBlockCopyKThr>{}, Int<1>{})),
@@ -223,7 +251,8 @@ template <typename T_> struct KernelSpec {
   static constexpr int kSmemSizeA = cosize(SmemALayout{}) * sizeof(T);
   static constexpr int kSmemSizeB = cosize(SmemBLayout{}) * sizeof(T);
   static constexpr int kShmSize = kSmemSizeA + kSmemSizeB;
-
+  
+  // S->R: l0 tiled
   using CopyAS2RAtom = Copy_Atom<AutoVectorizingCopy, T>;
   using TiledCopyAS2R = decltype(make_tiled_copy_A(CopyAS2RAtom{}, TiledMMA{}));
   using CopyBS2RAtom = Copy_Atom<AutoVectorizingCopy, T>;

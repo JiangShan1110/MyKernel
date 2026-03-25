@@ -17,8 +17,8 @@ class TestAbc:
         shape: Tuple[int, ...],
         dtype: torch.dtype,
         device: Optional[torch.device] = None,
-        scale: float = 8.0,
-        bias: float = -8.0,
+        scale: float = 1.0,
+        bias: float = -1.0,
         data: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         if device is None:
