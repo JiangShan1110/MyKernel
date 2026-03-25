@@ -64,22 +64,24 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   Tensor mB = make_tensor(make_gmem_ptr((T *)Bptr), make_shape(n, k), make_stride(k, Int<1>{}));
   Tensor mC = make_tensor(make_gmem_ptr((T *)Cptr), make_shape(m, n), make_stride(n, Int<1>{}));
 
-  auto tiler = make_tile(Int<kBlockM>{}, Int<kBlockN>{}, Int<kBlockK>{}); // 64 64 16
+  auto tiler = make_tile(Int<kBlockM>{}, Int<kBlockN>{}, Int<kBlockK>{});
   int m_idx = blockIdx.x;
   int n_idx = blockIdx.y;
-  auto coord = make_coord(m_idx, n_idx, 0);
+  auto coord = make_coord(m_idx, n_idx, _);
+
+  int loop_k = k / kBlockK;
   
   // the data that the block will process
-  Tensor gA = local_tile(mA, tiler, coord, Step<_1, X, _1>{}); 
-  Tensor gB = local_tile(mB, tiler, coord, Step<X, _1, _1>{});
-  Tensor gC = local_tile(mC, tiler, coord, Step<_1, _1, X>{}); 
+  Tensor gA = local_tile(mA, tiler, coord, Step<_1, X, _1>{}); // (128, 32), loop_k
+  Tensor gB = local_tile(mB, tiler, coord, Step<X, _1, _1>{}); // (128, 32), loop_k
+  Tensor gC = local_tile(mC, tiler, coord, Step<_1, _1, X>{}); // (128, 128)
 
   extern __shared__ __align__(1024) uint8_t smem[];
   uint8_t *ptr_sA = smem;
   uint8_t *ptr_sB = smem + Config::kSmemSizeA;
 
-  Tensor sA = make_tensor(make_smem_ptr<T>(ptr_sA), SmemALayout{});
-  Tensor sB = make_tensor(make_smem_ptr<T>(ptr_sB), SmemBLayout{});
+  Tensor sA = make_tensor(make_smem_ptr<T>(ptr_sA), SmemALayout{}); // (128, 32)
+  Tensor sB = make_tensor(make_smem_ptr<T>(ptr_sB), SmemBLayout{}); // (128, 32)
 
   // thread
   TiledMMA tiled_mma;
@@ -87,28 +89,28 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   
 
   // the register that the thread will use to store the data
-  Tensor tCrA = thr_mma.partition_fragment_A(gA); 
-  Tensor tCrB = thr_mma.partition_fragment_B(gB);
-  Tensor tCrC = thr_mma.partition_fragment_C(gC); 
+  Tensor tCrA = thr_mma.partition_fragment_A(gA(_, _, 0));  // (64, 16), 2, 2
+  Tensor tCrB = thr_mma.partition_fragment_B(gB(_, _, 0));  // (64, 16), 2, 2
+  Tensor tCrC = thr_mma.partition_fragment_C(gC);  // (64, 64), 2, 2
 
 
   // copy data from glm to smem
   TiledCopyAG2S tiled_copy_a_g2s;
   ThrCopy thr_copy_a_g2s = tiled_copy_a_g2s.get_slice(tid);
   // src glm
-  Tensor tAgA_g2s = thr_copy_a_g2s.partition_S(gA);
+  Tensor tAgA_g2s = thr_copy_a_g2s.partition_S(gA); // (32, 32), 4, 1, loop_k
   // dst smem
-  Tensor tAsA_g2s = thr_copy_a_g2s.partition_D(sA);
+  Tensor tAsA_g2s = thr_copy_a_g2s.partition_D(sA); // (32, 32), 4, 1
 
   TiledCopyBG2S tiled_copy_b_g2s;
   ThrCopy thr_copy_b_g2s = tiled_copy_b_g2s.get_slice(tid);
-  Tensor tBgB_g2s = thr_copy_b_g2s.partition_S(gB);
-  Tensor tBsB_g2s = thr_copy_b_g2s.partition_D(sB);
+  Tensor tBgB_g2s = thr_copy_b_g2s.partition_S(gB); // (32, 32), 4, 1, loop_k
+  Tensor tBsB_g2s = thr_copy_b_g2s.partition_D(sB); // (32, 32), 4, 1
 
   TiledCopyAS2R tiled_copy_a_s2r;
   ThrCopy thr_copy_a_s2r = tiled_copy_a_s2r.get_slice(tid);
-  Tensor tAsA_s2r = thr_copy_a_s2r.partition_S(sA);
-  Tensor tCrA_s2r = thr_copy_a_s2r.retile_D(tCrA);
+  Tensor tAsA_s2r = thr_copy_a_s2r.partition_S(sA); // (64, 16), 2, 2
+  Tensor tCrA_s2r = thr_copy_a_s2r.retile_D(tCrA); // (64, 16), 2, 2
 
   TiledCopyBS2R tiled_copy_b_s2r;
   ThrCopy thr_copy_b_s2r = tiled_copy_b_s2r.get_slice(tid);
@@ -120,24 +122,24 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
   Tensor tCrC_r2g = thr_copy_c_r2g.retile_S(tCrC);
   Tensor tCgC_r2g = thr_copy_c_r2g.partition_D(gC);
 
-  copy(tiled_copy_a_g2s, tAgA_g2s, tAsA_g2s);
-  copy(tiled_copy_b_g2s, tBgB_g2s, tBsB_g2s);
-
-  cp_async_fence();
-  cp_async_wait<0>();
-
-  __syncthreads();
-
-
-  copy(tiled_copy_a_s2r, tAsA_s2r, tCrA_s2r);
-  copy(tiled_copy_b_s2r, tBsB_s2r, tCrB_s2r);
-
   clear(tCrC);
-  gemm(tiled_mma, tCrC, tCrA, tCrB, tCrC);
 
-  
+  for (int itile = 0; itile < loop_k; ++itile) {
+    // copy a tile of A and B from global memory to shared memory
+    copy(tiled_copy_a_g2s, tAgA_g2s(_,_,_,itile), tAsA_g2s);
+    copy(tiled_copy_b_g2s, tBgB_g2s(_,_,_,itile), tBsB_g2s);
 
-  copy(tiled_copy_c_r2g, tCrC_r2g, tCgC_r2g);
+    cp_async_fence();
+    cp_async_wait<0>();
+    __syncthreads();
+
+    copy(tiled_copy_a_s2r, tAsA_s2r, tCrA_s2r);
+    copy(tiled_copy_b_s2r, tBsB_s2r, tCrB_s2r);
+
+    gemm(tiled_mma, tCrC, tCrA, tCrB, tCrC);
+
+    copy(tiled_copy_c_r2g, tCrC_r2g, tCgC_r2g);
+  }
 }
 
 namespace Config {
@@ -255,7 +257,7 @@ void run_gemm(const torch::Tensor &a, const torch::Tensor &b, torch::Tensor &c) 
 
   TORCH_CHECK((M % BlockM) == 0, "M dim must be divisible by ", BlockM);
   TORCH_CHECK((N % BlockN) == 0, "N dim must be divisible by ", BlockN);
-  TORCH_CHECK(K == BlockK, "K dim must be equal to", BlockK);
+  TORCH_CHECK((K % BlockK) == 0, "K dim must be divisible by ", BlockK);
 
   // cute::print(typename Config::TiledMMA{});
 
