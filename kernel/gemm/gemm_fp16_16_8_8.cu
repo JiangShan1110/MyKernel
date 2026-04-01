@@ -131,44 +131,58 @@ __global__ void gemm_fp16_16_8_8(void *Cptr, const void *Aptr, const void *Bptr,
 
   clear(tCrC);
 
+  copy(tiled_copy_a_g2s, tAgA_g2s(_,_,_,0), tAsA_g2s(_,_,_,0));
+  copy(tiled_copy_b_g2s, tBgB_g2s(_,_,_,0), tBsB_g2s(_,_,_,0));
+  cp_async_fence();
+  // tile1 may be finished before tile0
+  // Not strict FIFO
+  cp_async_wait<0>(); 
+  __syncthreads();
+
   for (int l1_k_idx = 0; l1_k_idx < l1_k_loop; ++l1_k_idx) {
     // copy a tile of A and B from global memory to shared memory
-    copy(tiled_copy_a_g2s, tAgA_g2s(_,_,_,l1_k_idx), tAsA_g2s);
-    copy(tiled_copy_b_g2s, tBgB_g2s(_,_,_,l1_k_idx), tBsB_g2s);
+    if (l1_k_idx + 1< l1_k_loop) {
+      copy(tiled_copy_a_g2s, tAgA_g2s(_,_,_,l1_k_idx + 1), tAsA_g2s(_,_,_,(l1_k_idx+1)%2));
+      copy(tiled_copy_b_g2s, tBgB_g2s(_,_,_,l1_k_idx + 1), tBsB_g2s(_,_,_,(l1_k_idx+1)%2));
+      cp_async_fence();
+    }
 
-    cp_async_fence();
-    cp_async_wait<0>();
+    if (l1_k_idx == l1_k_loop - 1) {
+      // last iteration
+      cp_async_wait<0>(); 
+    } else {
+      cp_async_wait<1>();
+    }
     __syncthreads();
 
-    // copy(tiled_copy_a_s2r, tAsA_s2r, tCrA_s2r);
-    // copy(tiled_copy_b_s2r, tBsB_s2r, tCrB_s2r);
+    copy(tiled_copy_a_s2r, tAsA_s2r(_,_,_,l1_k_idx%2), tCrA_s2r);
+    copy(tiled_copy_b_s2r, tBsB_s2r(_,_,_,l1_k_idx%2), tCrB_s2r);
+    gemm(tiled_mma, tCrC, tCrA, tCrB, tCrC);
+    copy(tiled_copy_c_r2g, tCrC_r2g, tCgC_r2g);
 
-    // gemm(tiled_mma, tCrC, tCrA, tCrB, tCrC);
-
-    // copy(tiled_copy_c_r2g, tCrC_r2g, tCgC_r2g);
     
-    int l0_m_loop = size<1>(tAsA_s2r);
-    int l0_n_loop = size<1>(tBsB_s2r);
-    int l0_k_loop = size<2>(tAsA_s2r); // or size<2>(tCrB)
-    for (int l0_m_idx = 0; l0_m_idx < l0_m_loop; ++l0_m_idx) {
-      for (int l0_n_idx = 0; l0_n_idx < l0_n_loop; ++l0_n_idx) {
-        for (int l0_k_idx = 0; l0_k_idx < l0_k_loop; ++l0_k_idx) {
-          copy(tiled_copy_a_s2r, tAsA_s2r(_, l0_m_idx, l0_k_idx), tCrA_s2r(_, l0_m_idx, l0_k_idx));
-          copy(tiled_copy_b_s2r, tBsB_s2r(_, l0_n_idx, l0_k_idx), tCrB_s2r(_, l0_n_idx, l0_k_idx));
+    // int l0_m_loop = size<1>(tAsA_s2r);
+    // int l0_n_loop = size<1>(tBsB_s2r);
+    // int l0_k_loop = size<2>(tAsA_s2r); // or size<2>(tCrB)
+    // for (int l0_m_idx = 0; l0_m_idx < l0_m_loop; ++l0_m_idx) {
+    //   for (int l0_n_idx = 0; l0_n_idx < l0_n_loop; ++l0_n_idx) {
+    //     for (int l0_k_idx = 0; l0_k_idx < l0_k_loop; ++l0_k_idx) {
+    //       copy(tiled_copy_a_s2r, tAsA_s2r(_, l0_m_idx, l0_k_idx, 0), tCrA_s2r(_, l0_m_idx, l0_k_idx));
+    //       copy(tiled_copy_b_s2r, tBsB_s2r(_, l0_n_idx, l0_k_idx, 0), tCrB_s2r(_, l0_n_idx, l0_k_idx));
           
           
-          for (int mme_m_idx = l0_m_idx * kLoopM; mme_m_idx < (l0_m_idx + 1) * kLoopM; ++mme_m_idx) {
-            for (int mme_n_idx = l0_n_idx * kLoopN; mme_n_idx < (l0_n_idx + 1) * kLoopN; ++mme_n_idx) {
-              for (int mme_k_idx = l0_k_idx * kLoopK; mme_k_idx < (l0_k_idx + 1) * kLoopK; ++mme_k_idx) {
-                gemm(tiled_mma, tCrC(_, mme_m_idx, mme_n_idx), tCrA(_, mme_m_idx, mme_k_idx), tCrB(_, mme_n_idx, mme_k_idx), tCrC(_, mme_m_idx, mme_n_idx));
-              }
-            }
-          }
+    //       for (int mme_m_idx = l0_m_idx * kLoopM; mme_m_idx < (l0_m_idx + 1) * kLoopM; ++mme_m_idx) {
+    //         for (int mme_n_idx = l0_n_idx * kLoopN; mme_n_idx < (l0_n_idx + 1) * kLoopN; ++mme_n_idx) {
+    //           for (int mme_k_idx = l0_k_idx * kLoopK; mme_k_idx < (l0_k_idx + 1) * kLoopK; ++mme_k_idx) {
+    //             gemm(tiled_mma, tCrC(_, mme_m_idx, mme_n_idx), tCrA(_, mme_m_idx, mme_k_idx), tCrB(_, mme_n_idx, mme_k_idx), tCrC(_, mme_m_idx, mme_n_idx));
+    //           }
+    //         }
+    //       }
 
-          copy(tiled_copy_c_r2g, tCrC_r2g(_, l0_m_idx, l0_n_idx), tCgC_r2g(_, l0_m_idx, l0_n_idx));
-        }
-      }
-    }
+    //       copy(tiled_copy_c_r2g, tCrC_r2g(_, l0_m_idx, l0_n_idx), tCgC_r2g(_, l0_m_idx, l0_n_idx));
+    //     }
+    //   }
+    // }
   }
 }
 
@@ -205,6 +219,8 @@ template <typename T_> struct KernelSpec {
   constexpr static int kTiledMmaM = kWarpM * kWarpTiledM; // 64
   constexpr static int kTiledMmaN = kWarpN * kWarpTiledN; // 64
   constexpr static int kTiledMmaK = kWarpK * kWarpTiledK; // 16
+
+  constexpr static int kStage = 2; // double buffer
   
   
   // warp nums
@@ -246,10 +262,11 @@ template <typename T_> struct KernelSpec {
                                                 make_layout(make_shape(Int<1>{}, Int<kElement>{}),
                                                           make_stride(Int<kElement>{}, Int<1>{}))));
   
-  using SmemLayoutAtom = decltype(composition(Swizzle<3, 3, 3>{}, make_layout(make_shape(Int<kBlockTiledM>{}, Int<kBlockTiledK>{}),
+  // 8 rows, 8 cols, 4 bank
+  using SmemLayoutAtom = decltype(composition(Swizzle<3, 3, 3>{}, make_layout(make_shape(Int<8>{}, Int<kBlockTiledK>{}),
                                   make_stride(Int<kBlockTiledK>{}, Int<1>{}))));
-  using SmemALayout = decltype(tile_to_shape(SmemLayoutAtom{}, make_shape(Int<kBlockTiledM>{}, Int<kBlockTiledK>{}), GenRowMajor{}));
-  using SmemBLayout = decltype(tile_to_shape(SmemLayoutAtom{}, make_shape(Int<kBlockTiledN>{}, Int<kBlockTiledK>{}), GenRowMajor{}));
+  using SmemALayout = decltype(tile_to_shape(SmemLayoutAtom{}, make_shape(Int<kBlockTiledM>{}, Int<kBlockTiledK>{}, Int<kStage>{})));
+  using SmemBLayout = decltype(tile_to_shape(SmemLayoutAtom{}, make_shape(Int<kBlockTiledN>{}, Int<kBlockTiledK>{}, Int<kStage>{})));
   
   static constexpr int kSmemSizeA = cosize(SmemALayout{}) * sizeof(T);
   static constexpr int kSmemSizeB = cosize(SmemBLayout{}) * sizeof(T);
