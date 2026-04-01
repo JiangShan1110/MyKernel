@@ -7,6 +7,9 @@
 
 #define TIME_CUDA_KERNEL(stream, ...)                                   \
     do {                                                                \
+        for (int __i = 0; __i < 10; ++__i) {                            \
+            __VA_ARGS__;                                                \
+        }                                                               \
         cudaEvent_t __start, __stop;                                    \
         cudaEventCreate(&__start);                                      \
         cudaEventCreate(&__stop);                                       \
@@ -242,21 +245,22 @@ template <typename T_> struct KernelSpec {
                                                               make_stride(Int<kBlockCopyKThr>{}, Int<1>{})),
                                                 make_layout(make_shape(Int<1>{}, Int<kElement>{}),
                                                           make_stride(Int<kElement>{}, Int<1>{}))));
-                                                          
-  using SmemALayout = decltype(make_layout(make_shape(Int<kBlockTiledM>{}, Int<kBlockTiledK>{}),
-                                  make_stride(Int<kBlockTiledK>{}, Int<1>{})));
-  using SmemBLayout = decltype(make_layout(make_shape(Int<kBlockTiledN>{}, Int<kBlockTiledK>{}),
-                                  make_stride(Int<kBlockTiledK>{}, Int<1>{})));
+  
+  using SmemLayoutAtom = decltype(composition(Swizzle<3, 3, 3>{}, make_layout(make_shape(Int<kBlockTiledM>{}, Int<kBlockTiledK>{}),
+                                  make_stride(Int<kBlockTiledK>{}, Int<1>{}))));
+  using SmemALayout = decltype(tile_to_shape(SmemLayoutAtom{}, make_shape(Int<kBlockTiledM>{}, Int<kBlockTiledK>{}), GenRowMajor{}));
+  using SmemBLayout = decltype(tile_to_shape(SmemLayoutAtom{}, make_shape(Int<kBlockTiledN>{}, Int<kBlockTiledK>{}), GenRowMajor{}));
   
   static constexpr int kSmemSizeA = cosize(SmemALayout{}) * sizeof(T);
   static constexpr int kSmemSizeB = cosize(SmemBLayout{}) * sizeof(T);
   static constexpr int kShmSize = kSmemSizeA + kSmemSizeB;
   
   // S->R: l0 tiled
-  using CopyAS2RAtom = Copy_Atom<AutoVectorizingCopy, T>;
-  using TiledCopyAS2R = decltype(make_tiled_copy_A(CopyAS2RAtom{}, TiledMMA{}));
+  using CopyS2RInstr = SM75_U32x4_LDSM_N;
+  using CopyS2RAtom = Copy_Atom<CopyS2RInstr, T>;
+  using TiledCopyAS2R = decltype(make_tiled_copy_A(CopyS2RAtom{}, TiledMMA{}));
   using CopyBS2RAtom = Copy_Atom<AutoVectorizingCopy, T>;
-  using TiledCopyBS2R = decltype(make_tiled_copy_B(CopyBS2RAtom{}, TiledMMA{}));
+  using TiledCopyBS2R = decltype(make_tiled_copy_B(CopyS2RAtom{}, TiledMMA{}));
   using CopyCR2GAtom = Copy_Atom<AutoVectorizingCopy, T>;
   using TiledCopyCR2G = decltype(make_tiled_copy_C(CopyCR2GAtom{}, TiledMMA{}));
 };
