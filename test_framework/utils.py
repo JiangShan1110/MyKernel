@@ -1,6 +1,7 @@
 import datetime
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -8,9 +9,13 @@ import torch
 from torch.utils.cpp_extension import load
 
 LOG = logging.getLogger(__name__)
-DIR = Path("/root/MyKernel")
-ARCH = ".".join(map(str, torch.cuda.get_device_capability()))
-os.environ["TORCH_CUDA_ARCH_LIST"] = ARCH
+DIR = Path(__file__).resolve().parent.parent
+_venv_bin = DIR / ".venv" / "bin"
+if _venv_bin.exists() and str(_venv_bin) not in os.environ.get("PATH", "").split(os.pathsep):
+    os.environ["PATH"] = str(_venv_bin) + os.pathsep + os.environ.get("PATH", "")
+if torch.cuda.is_available():
+    ARCH = ".".join(map(str, torch.cuda.get_device_capability()))
+    os.environ["TORCH_CUDA_ARCH_LIST"] = ARCH
 
 
 def make_json_friendly(obj: Any) -> Any:
@@ -34,6 +39,7 @@ def load_cutlass_extension(
     file_path = DIR / source_file
 
     cflags = [
+        "-allow-unsupported-compiler",
         "-O3",
         "--use_fast_math",
         "-U__CUDA_NO_HALF_OPERATORS__",

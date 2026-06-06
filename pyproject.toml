@@ -24,6 +24,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+pythonpath = [
+  "."
+]
 addopts = [
     "-p", "no:logging",      
     "-vv", "-s",
@@ -35,6 +38,3 @@ addopts = [
 url = "https://mirrors.aliyun.com/pypi/simple/"
 default = true
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["kernel*", "test_framework"]
